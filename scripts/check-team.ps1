@@ -217,7 +217,7 @@ foreach ($name in $overrides.Keys) {
 
 # Lead compact window: .claude/team/session.json (owned by the lead) is copied by the SessionStart hook into the project
 # .claude/settings.local.json. Documented precedence: env CLAUDE_CODE_AUTO_COMPACT_WINDOW > --autocompact flag (not
-# visible from here) > modelSettings.<model>.autoCompactWindow > top-level autoCompactWindow (local > project > user). Read only.
+# visible from here) > modelSettings.<model>.autoCompactWindow > top-level autoCompactWindow (local > project > user; managed settings above all). Read only.
 $cwInfo = $null
 $cwSession = Get-CompactSession $team
 if ($cwSession.Exists) {
@@ -231,13 +231,18 @@ if ($cwSession.Exists) {
     $cwProj = Read-JsonFile $cwProjFile
     $localVal = if ($cwLocal -and $cwLocal.PSObject.Properties['autoCompactWindow']) { [string]$cwLocal.autoCompactWindow } else { '' }
     $projVal = if ($cwProj -and $cwProj.PSObject.Properties['autoCompactWindow']) { [string]$cwProj.autoCompactWindow } else { '' }
-    $overrides2 = @(Get-CompactUserOverrides @($ClaudeHome))
+    $overrides2 = @(Get-CompactUserOverrides @($ClaudeHome) $Project)
     $winner = $null; $winnerVal = $null
     if ($overrides2.Count -gt 0) {
       $winner = $overrides2[0]
-      $warnings.Add("the user's own compact window wins over session.json ($($cwSession.Value)): $($overrides2 -join '; '). The hook leaves settings.local.json untouched.")
+      $warnings.Add("a higher-priority setting wins over session.json ($($cwSession.Value)): $($overrides2 -join '; '). The hook leaves settings.local.json untouched. (The --autocompact flag cannot be seen from here.)")
     } elseif ($localVal -ne '') { $winner = "$cwLocalFile"; $winnerVal = $localVal }
     elseif ($projVal -ne '') { $winner = "$cwProjFile"; $winnerVal = $projVal }
+    else {
+      $cwUserFile = Join-Path $ClaudeHome 'settings.json'
+      $cwUser = Read-JsonFile $cwUserFile
+      if ($cwUser -and $cwUser.PSObject.Properties['autoCompactWindow'] -and $null -ne $cwUser.autoCompactWindow) { $winner = $cwUserFile; $winnerVal = [string]$cwUser.autoCompactWindow }
+    }
     if ($overrides2.Count -eq 0) {
       if ($localVal -ne '' -and $localVal -ne [string]$cwSession.Value) {
         $warnings.Add("session.json says $($cwSession.Value) but autoCompactWindow in $cwLocalFile is $localVal; the hook syncs it at the next session start.")
@@ -254,6 +259,7 @@ if ($cwSession.Exists) {
     else { $cwInfo = "lead compact window: session.json says $($cwSession.Value), not yet in settings.local.json (the hook writes it at the next session start)" }
   }
 }
+if (-not $cwSession.Exists) { $cwInfo = 'no session.json: the lead should create it (templates/session.json in agent-crew) so its compact window is managed' }
 foreach ($f in @((Join-Path $ClaudeHome 'settings.json'), (Join-Path $Project '.claude/settings.json'), (Join-Path $Project '.claude/settings.local.json'))) {
   $j = Read-JsonFile $f
   if ($j -and $j.PSObject.Properties['idleCompaction'] -and $j.idleCompaction -eq $false) {

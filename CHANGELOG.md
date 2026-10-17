@@ -15,6 +15,11 @@ the session-start hook says when it differs from the installed one.
   file, prints the effective value and which source wins, and warns about overrides and `idleCompaction: false`.
   The settings template no longer carries `autoCompactWindow`. README "Long sessions". `lead.md`: read report
   summaries, not whole reports; send a review's concrete fixes to the coder in one message.
+  Upgrading a project: nothing breaks; without `session.json` the hook does nothing and `check-team` prints an INFO
+  saying the lead should create it (copy `templates/session.json` into `.claude/team/`). With one, the hook adds it
+  to the project `.gitignore` once. The hook edits `settings.local.json` as text (comments make it skip the file),
+  never fights managed settings, the env var (also in an `env` block) or `modelSettings`, and replaces an old local
+  350000 from earlier templates.
 
 ## 0.4.1 - 2026-10-18
 

@@ -354,18 +354,29 @@ in an agent's front matter does not apply when the agent is the main session (`c
   skipped when unchanged, a missing or invalid `session.json` leaves settings alone and warns). It
   takes effect from the next session start; whether a running session picks up a settings change is
   not verified.
-- **Your own value wins.** Documented order: env `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, the
-  `--autocompact` flag, `modelSettings.<model>.autoCompactWindow` (written by `/autocompact`), then
-  top-level `autoCompactWindow`. If you set the env var or a value in your user settings, the hook
-  does not fight it: it warns that yours wins. `check-team` validates `session.json`, prints the
-  effective value and the source that wins, and warns about overrides and `idleCompaction: false`.
+- **What wins.** Documented order, highest first: managed (policy) settings, env
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (process environment or the `env` block of a settings file), the
+  `--autocompact` flag, `modelSettings.<model>.autoCompactWindow` (written by `/autocompact`), then top-level
+  `autoCompactWindow` (local beats project beats user). So the hook writes to `settings.local.json` and a
+  user top-level key does not win; but if it finds an env var (also in an `env` block), a `modelSettings`
+  entry or a managed value it does not fight it: it leaves settings alone and warns that the other value wins.
+  The `--autocompact` flag cannot be seen by scripts. Managed settings paths are the documented per-OS
+  ones, written from memory (unverified): `C:\Program Files\ClaudeCode\managed-settings.json`,
+  `/Library/Application Support/ClaudeCode/managed-settings.json`, `/etc/claude-code/managed-settings.json`.
+  `check-team` validates `session.json`, prints the effective value and the winning source, says when
+  there is no `session.json` (the lead should create it), and warns about overrides and `idleCompaction: false`.
+- **Your file stays yours.** The hook edits `settings.local.json` as text: it replaces only the number (or
+  inserts the key after the opening brace), never reformats or re-escapes, and leaves a file with comments
+  untouched with a warning. Writes go through a unique temp file and an atomic replace (retried a few
+  times; a short-lived `*.bak` made by the replace is deleted, so a stray `*.bak` means a crash). It also
+  adds `.claude/team/session.json` to the project `.gitignore` once (git work trees only).
 - **Idle compaction.** `idleCompaction` (default true) compacts a session that has been idle about
   54 minutes (the 1h cache lifetime) instead of re-reading the whole context cold.
 - **After a compaction** the lead re-reads `.claude/team/state.md`, which is authoritative for open
   tasks and running agents (the session-start hook prints it).
 
-The settings template still carries a 350000 `autoCompactWindow` in `settings.local.json`; that
-file wins over `.claude/settings.json`, so remove the key there once the project value is set.
+Existing projects may still have an old local `autoCompactWindow` (earlier templates carried 350000): the
+hook replaces it with the `session.json` value.
 
 ## Tests
 

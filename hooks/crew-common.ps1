@@ -573,18 +573,42 @@ function Get-CompactSession {
   return $r
 }
 
+function Get-ManagedSettingsPaths {
+  # Managed (policy) settings files, the top of the precedence order. AGENT_CREW_MANAGED_SETTINGS overrides the list
+  # (tests; also handy for an unusual install). Default paths are the documented ones, written from memory: unverified.
+  $o = [Environment]::GetEnvironmentVariable('AGENT_CREW_MANAGED_SETTINGS')
+  if (-not [string]::IsNullOrWhiteSpace($o)) { return @($o) }
+  return @(
+    'C:\Program Files\ClaudeCode\managed-settings.json',
+    'C:\ProgramData\ClaudeCode\managed-settings.json',
+    '/Library/Application Support/ClaudeCode/managed-settings.json',
+    '/etc/claude-code/managed-settings.json'
+  )
+}
+
 function Get-CompactUserOverrides {
-  # Settings the user made themselves that the hook must not fight (strings, one per source). The documented order
-  # is env > --autocompact flag (invisible here) > modelSettings.<model> > top-level; a top-level user key is
-  # reported too so the hook never overwrites what the user chose.
-  param([string[]]$ClaudeHomes)
+  # Settings the hook must not fight (one string per source). What really beats a project settings.local.json
+  # top-level autoCompactWindow, by the documented order: managed settings, the env var CLAUDE_CODE_AUTO_COMPACT_WINDOW
+  # (process environment or the `env` block of any settings file), the --autocompact flag (invisible to scripts, so NOT
+  # detected), and modelSettings.<model>.autoCompactWindow. A user's top-level key does NOT win: local beats user.
+  param([string[]]$ClaudeHomes, [string]$Project = '')
   $out = New-Object System.Collections.Generic.List[string]
   $e = [Environment]::GetEnvironmentVariable('CLAUDE_CODE_AUTO_COMPACT_WINDOW')
   if (-not [string]::IsNullOrWhiteSpace($e)) { $out.Add("the environment variable CLAUDE_CODE_AUTO_COMPACT_WINDOW ($($e.Trim()))") }
-  foreach ($h in @($ClaudeHomes | Where-Object { $_ } | Select-Object -Unique)) {
-    $f = Join-Path $h 'settings.json'
+  $files = New-Object System.Collections.Generic.List[object]
+  foreach ($m in Get-ManagedSettingsPaths) { $files.Add(@{ Path = $m; Managed = $true }) }
+  foreach ($h in @($ClaudeHomes | Where-Object { $_ } | Select-Object -Unique)) { $files.Add(@{ Path = (Join-Path $h 'settings.json'); Managed = $false }) }
+  if ($Project) {
+    $files.Add(@{ Path = (Join-Path $Project '.claude/settings.json'); Managed = $false })
+    $files.Add(@{ Path = (Join-Path $Project '.claude/settings.local.json'); Managed = $false })
+  }
+  foreach ($fe in $files) {
+    $f = $fe.Path
     $j = Read-JsonFile $f
     if (-not $j) { continue }
+    if ($j.PSObject.Properties['env'] -and $j.env -and $j.env.PSObject.Properties['CLAUDE_CODE_AUTO_COMPACT_WINDOW'] -and -not [string]::IsNullOrWhiteSpace([string]$j.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)) {
+      $out.Add("CLAUDE_CODE_AUTO_COMPACT_WINDOW ($($j.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)) in the env block of $f")
+    }
     if ($j.PSObject.Properties['modelSettings'] -and $j.modelSettings) {
       foreach ($m in $j.modelSettings.PSObject.Properties) {
         if ($m.Value -and $m.Value.PSObject.Properties['autoCompactWindow'] -and $null -ne $m.Value.autoCompactWindow) {
@@ -592,36 +616,119 @@ function Get-CompactUserOverrides {
         }
       }
     }
-    if ($j.PSObject.Properties['autoCompactWindow'] -and $null -ne $j.autoCompactWindow) { $out.Add("autoCompactWindow ($($j.autoCompactWindow)) in $f") }
+    if ($fe.Managed -and $j.PSObject.Properties['autoCompactWindow'] -and $null -ne $j.autoCompactWindow) {
+      $out.Add("autoCompactWindow ($($j.autoCompactWindow)) in the managed settings $f")
+    }
   }
   return @($out)
 }
 
+function Find-TopLevelNumber {
+  # Textual scan of a JSON object: finds the top-level key and its value token. Returns @{ Start; Length; IsNumber }
+  # for an existing key, @{ Missing = $true; Open = <index of the opening brace> } otherwise, $null if no object.
+  param([string]$Text, [string]$Key)
+  $n = $Text.Length
+  $open = $Text.IndexOf('{')
+  if ($open -lt 0) { return $null }
+  $depth = 0; $i = $open
+  while ($i -lt $n) {
+    $c = $Text[$i]
+    if ($c -eq '"') {
+      $start = $i; $i++
+      while ($i -lt $n -and $Text[$i] -ne '"') { if ($Text[$i] -eq '\') { $i++ }; $i++ }
+      $str = $Text.Substring($start + 1, [Math]::Max(0, $i - $start - 1))
+      $i++
+      if ($depth -eq 1 -and $str -ceq $Key) {
+        $k = $i
+        while ($k -lt $n -and [char]::IsWhiteSpace($Text[$k])) { $k++ }
+        if ($k -lt $n -and $Text[$k] -eq ':') {
+          $k++
+          while ($k -lt $n -and [char]::IsWhiteSpace($Text[$k])) { $k++ }
+          $vs = $k
+          while ($k -lt $n -and $Text[$k] -notin ',', '}', ']', ' ', "`t", "`r", "`n") { $k++ }
+          $tok = $Text.Substring($vs, $k - $vs)
+          return @{ Start = $vs; Length = $k - $vs; IsNumber = ($tok -match '^-?\d+$') }
+        }
+      }
+      continue
+    }
+    if ($c -eq '/' -and $i + 1 -lt $n -and ($Text[$i + 1] -eq '/' -or $Text[$i + 1] -eq '*')) { return $null }
+    if ($c -eq '{' -or $c -eq '[') { $depth++ } elseif ($c -eq '}' -or $c -eq ']') { $depth-- }
+    $i++
+  }
+  return @{ Missing = $true; Open = $open }
+}
+
 function Set-ProjectCompactWindow {
-  # Writes ONLY the autoCompactWindow key of <project>/.claude/settings.local.json (created if missing, every other key
-  # kept, atomic replace). Returns 'unchanged', 'created', 'changed' or 'unreadable' (not valid JSON: left untouched).
+  # Writes ONLY the autoCompactWindow key of <project>/.claude/settings.local.json. The file is edited as text: an
+  # existing numeric value is replaced in place, a missing key is inserted right after the opening brace, everything
+  # else stays byte for byte (no reformatting, no escaping). A missing file is created. The write goes through a unique
+  # temp file and File.Replace (retried a few times; a short-lived .bak is removed afterwards). Returns 'unchanged',
+  # 'created', 'changed', 'unreadable' (not plain valid JSON, e.g. comments: untouched) or 'failed' (file busy).
   param([string]$Project, [long]$Value)
   $path = Join-Path $Project '.claude/settings.local.json'
+  $utf8 = New-Object System.Text.UTF8Encoding($false)
+  $uniq = "$PID.$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+  $tmp = "$path.$uniq.tmp"
+  $bak = "$path.$uniq.bak"
   $existed = Test-Path -LiteralPath $path -PathType Leaf
-  if ($existed) {
-    $j = Read-JsonFile $path
-    if ($null -eq $j -or $j -is [array] -or $j -is [string] -or $j -is [ValueType]) { return 'unreadable' }
-    $prop = $j.PSObject.Properties['autoCompactWindow']
-    if ($prop -and $null -ne $prop.Value -and "$($prop.Value)" -eq "$Value") { return 'unchanged' }
-    if ($prop) { $j.autoCompactWindow = $Value } else { $j | Add-Member -NotePropertyName autoCompactWindow -NotePropertyValue $Value }
-  } else {
-    $j = [pscustomobject]@{ autoCompactWindow = $Value }
-    $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path)
+  try {
+    if ($existed) {
+      $text = $utf8.GetString([System.IO.File]::ReadAllBytes($path))
+      $j = $null
+      try { $j = $text.TrimStart([char]0xFEFF) | ConvertFrom-Json -ErrorAction Stop } catch { return 'unreadable' }
+      if ($null -eq $j -or $j -is [array] -or $j -is [string] -or $j -is [ValueType]) { return 'unreadable' }
+      $hit = Find-TopLevelNumber $text 'autoCompactWindow'
+      if ($null -eq $hit) { return 'unreadable' }
+      if ($hit.Missing) {
+        $ws = ''
+        $k = $hit.Open + 1
+        while ($k -lt $text.Length -and [char]::IsWhiteSpace($text[$k])) { $ws += $text[$k]; $k++ }
+        $empty = ($k -lt $text.Length -and $text[$k] -eq '}')
+        $ins = if ($empty) { "$ws`"autoCompactWindow`": $Value$ws" } else { "$ws`"autoCompactWindow`": $Value,$ws" }
+        $new = $text.Substring(0, $hit.Open + 1) + $ins + $text.Substring($k)
+      } else {
+        if (-not $hit.IsNumber) { return 'unreadable' }
+        if ($text.Substring($hit.Start, $hit.Length) -eq "$Value") { return 'unchanged' }
+        $new = $text.Substring(0, $hit.Start) + "$Value" + $text.Substring($hit.Start + $hit.Length)
+      }
+    } else {
+      $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path)
+      $new = "{`n  `"autoCompactWindow`": $Value`n}`n"
+    }
+    [System.IO.File]::WriteAllBytes($tmp, $utf8.GetBytes($new))
+    for ($try = 1; $try -le 5; $try++) {
+      try {
+        if ($existed) { [System.IO.File]::Replace($tmp, $path, $bak) } else { [System.IO.File]::Move($tmp, $path) }
+        if ($existed) { return 'changed' } else { return 'created' }
+      } catch {
+        if ($try -eq 5) { return 'failed' }
+        Start-Sleep -Milliseconds (50 * $try)
+      }
+    }
+    return 'failed'
+  } catch {
+    return 'failed'
+  } finally {
+    Remove-Item -LiteralPath $tmp, $bak -Force -ErrorAction SilentlyContinue
   }
-  $text = ($j | ConvertTo-Json -Depth 32) + "`n"
-  $tmp = $path + '.agent-crew.tmp'
-  [System.IO.File]::WriteAllText($tmp, $text, (New-Object System.Text.UTF8Encoding($false)))
-  if ($existed) {
-    $bak = $path + '.agent-crew.bak'
-    [System.IO.File]::Replace($tmp, $path, $bak)
-    Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue
-  } else { [System.IO.File]::Move($tmp, $path) }
-  if ($existed) { return 'changed' } else { return 'created' }
+}
+
+function Add-SessionJsonToGitignore {
+  # Once per project: keeps .claude/team/session.json out of git (the lead changes it without a pull request).
+  # Appends the line to the project's .gitignore when the project is a git work tree and the line is missing.
+  param([string]$Project)
+  $gi = Join-Path $Project '.gitignore'
+  if (-not (Test-Path -LiteralPath (Join-Path $Project '.git'))) { return }
+  $line = '.claude/team/session.json'
+  $text = ''
+  if (Test-Path -LiteralPath $gi -PathType Leaf) {
+    $text = [System.IO.File]::ReadAllText($gi)
+    foreach ($l in ($text -split "`r?`n")) { if ($l.Trim() -ceq $line -or $l.Trim() -ceq "/$line") { return } }
+  }
+  $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+  if ($text.Length -gt 0 -and -not $text.EndsWith("`n")) { $text += $nl }
+  [System.IO.File]::WriteAllText($gi, $text + $line + $nl, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 function Invoke-CompactWindowSync {
@@ -629,13 +736,15 @@ function Invoke-CompactWindowSync {
   param([string]$Team, [string]$Project, [string[]]$ClaudeHomes)
   $s = Get-CompactSession $Team
   if (-not $s.Exists) { return @() }
+  try { Add-SessionJsonToGitignore $Project } catch { }
   if ($s.Problem) { return @("agent-crew: .claude/team/session.json is unusable ($($s.Problem)); autoCompactWindow in .claude/settings.local.json is left untouched. Fix the file.") }
-  $over = @(Get-CompactUserOverrides $ClaudeHomes)
+  $over = @(Get-CompactUserOverrides $ClaudeHomes $Project)
   if ($over.Count -gt 0) {
-    return @("agent-crew: session.json asks for a lead compact window of $($s.Value) but you set your own value ($($over -join '; ')). Your value wins; settings.local.json is left untouched.")
+    return @("agent-crew: session.json asks for a lead compact window of $($s.Value) but a higher-priority setting is in force ($($over -join '; ')). That value wins; settings.local.json is left untouched.")
   }
   $res = Set-ProjectCompactWindow $Project $s.Value
-  if ($res -eq 'unreadable') { return @('agent-crew: .claude/settings.local.json is not valid JSON; autoCompactWindow was not updated.') }
+  if ($res -eq 'unreadable') { return @('agent-crew: .claude/settings.local.json is not plain valid JSON (comments?) or its autoCompactWindow is not a number; autoCompactWindow was not updated.') }
+  if ($res -eq 'failed') { return @('agent-crew: could not write .claude/settings.local.json (file busy?); autoCompactWindow was not updated. It is retried at the next session start.') }
   if ($res -eq 'unchanged') { return @() }
   $why = ''; if ($s.Reason) { $why = " Reason: $($s.Reason)." }
   $clamp = ''; if ($s.Clamped) { $clamp = " (requested $($s.Requested), clamped to $($script:CompactMin)-$($script:CompactMax))" }
