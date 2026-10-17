@@ -80,7 +80,7 @@ It copies:
 | `hooks/`, `scripts/`, `data/`, `templates/`, `catalog/`, `docs/RULES.md`, `VERSION` | `~/.claude/agent-crew/` (the hooks run from here) |
 | `templates/USER.md` | `~/.claude/team/USER.md`, **only if missing** |
 
-and merges five hook entries into `~/.claude/settings.json` (a backup is made first; running
+and merges the hook entries (12 with the defaults) into `~/.claude/settings.json` (a backup is made first; running
 it again never duplicates entries; your other settings are kept). What was installed, with
 a hash of each file, is recorded in `~/.claude/agent-crew/installed.json`.
 
@@ -114,7 +114,7 @@ pending. After an update, projects get a one-line notice at session start if the
 ### Uninstall
 
 `install.ps1 -Uninstall` removes the files it installed (the ones you edited are kept), the
-`.new` files and the five hook entries (backup first). Project `.claude/team/` folders are not
+`.new` files and the hook entries (backup first). Project `.claude/team/` folders are not
 touched; delete them yourself.
 
 ## Precedence and project overrides
@@ -158,6 +158,7 @@ fail open (a broken hook never blocks work). They read the hook JSON from stdin
 | Hook | Event | Does |
 |---|---|---|
 | `guard-paths` | PreToolUse `Edit\|Write\|MultiEdit\|NotebookEdit` | Lead may write only `.claude/team/**` (except `PROJECT.md`) and `~/.claude/team/**`, plus the `lead_writable` globs (never settings, hooks or PROJECT.md). thinker, architect, reviewer (+ `ui-reviewer`, `security-reviewer`, `perf-profiler`, + `report_only_agents`) may write only `.claude/team/reports/**`. Others unrestricted. Blocks with exit 2 and a reason. |
+| `ram-guard` | PreToolUse `Agent\|Task`, and `Bash` / `PowerShell` with an `if` filter such as `Bash(claude *)` | Blocks starting new heavy work (a subagent, or a command matching a configured pattern) while free memory is below that job kind's threshold. Exit 2 and a reason; never kills anything. See [RAM guard](#ram-guard). |
 | `check-caps` | PostToolUse, same matcher | Warns (never blocks) when state/routing/roster are over their cap. |
 | `pre-compact` | PreCompact | Copies `state.md` to `snapshots/`, keeps the newest 5. |
 | `post-compact` | PostCompact | Appends trigger and summary to `compact_log.md`, keeps the newest 20. |
@@ -175,10 +176,104 @@ fail open (a broken hook never blocks work). They read the hook JSON from stdin
 - The identity check relies on the hook input field `agent_type`; without it the guard allows.
 - The guard is registered **once**, in `~/.claude/settings.json` (not in the agent files).
   `install.ps1 -NoSettings` therefore means no guard at all.
+- `ram-guard` is registered for every Agent / Task call and, through an `if` filter, only for the Bash and
+  PowerShell commands that can match its patterns (cost and consequences under [RAM guard](#ram-guard)).
 - Cost: every hook is a fresh `powershell.exe` start, about 350 ms each even when it does nothing
   (measured on one Windows machine). An Edit or Write call pays for two (guard before, caps after),
   about 0.7 s. The guard reads stdin and exits before loading anything when there is no
   `agent_type`, but the process start itself cannot be avoided.
+
+## RAM guard
+
+Agents run heavy things (subagents, test suites, game engines, headless `claude`) while you work on
+the same PC. The `ram-guard` hook stops **new** work when free physical memory is low, so the machine
+does not freeze at 100% RAM. It blocks with exit 2 and tells the model: `free RAM 900 MB < needed
+1500 MB for 'agent-spawn'`, wait for running work to finish, do not retry in a loop, tell the user.
+It **never kills** anything and never touches work that is already running. `lead.md` carries the
+matching one-line instruction.
+
+**Kinds of jobs.** A kind has a name, `min_free_mb`, and what it matches:
+
+- `tools: ["Agent", "Task"]` matches **every** subagent spawn (patterns do not apply to spawns, so a
+  `patterns`-only override of such a kind does not turn it off).
+- `patterns` (regular expressions, case-insensitive, **200 ms match timeout**: a pattern that times out or
+  does not compile is skipped with a warning) are matched against the Bash/PowerShell command. With
+  patterns and no `tools`, the tools default to Bash and PowerShell. A kind for shell commands with no
+  valid pattern is skipped with a warning; it never matches every command.
+- When several kinds match one call, the highest `min_free_mb` decides.
+
+Shipped defaults (`data/ram-guard.json`, **all numbers are guesses**, tune them):
+
+| Kind | Matches | Needs free |
+|---|---|---|
+| `agent-spawn` | every Agent / Task call | 1500 MB |
+| `claude-headless` | `claude -p` / `claude --print` **at the start of a command** (also after `;` `&&` `\|\|` `\|` `$(` or a newline, after `VAR=x`, with a path or `.exe`); not inside quotes (`git commit -m "document claude -p"`) and not as an argument (`echo claude -p`, `grep 'claude -p'`) | 2500 MB |
+
+A heavy job started inside a quoted string (`bash -c "claude -p ..."`) or by a script that starts it is not
+seen: the guard looks only at the tool name and the command text. No project-specific commands are shipped.
+
+**Override files**, merged in this order: shipped `data/ram-guard.json` < `~/.claude/team/ram-guard.json`
+(the user, or `$CLAUDE_CONFIG_DIR/team/`) < `<project>/.claude/team/ram-guard.json` (commit it with the
+project).
+
+**Trust boundary.** The user file may change anything: replace a kind of the same name field by field,
+lower a threshold, `"enabled": false` for the whole guard or one kind, `"project_max_mb"` (below),
+`"scan_all_commands"` (below). The **project** file is in the repository, where an agent can edit it, so it
+may only make things **stricter**: add kinds, add patterns and tools to a kind (never remove the inherited
+ones), raise `min_free_mb`, but never above the user's `project_max_mb` (default **8000**, a guess; a higher
+request is lowered to it). It cannot lower a threshold, switch the guard or a kind off, or set
+`project_max_mb`: such entries are ignored with a warning. Example project file for a heavy engine:
+
+```json
+{
+  "kinds": {
+    "my-engine": {
+      "description": "headless run of my-engine",
+      "patterns": ["(^|[;&|\\n(])\\s*my-engine\\s+--headless", "\\bmy-tests\\b"],
+      "hook_if": ["my-engine *"],
+      "min_free_mb": 4000
+    },
+    "agent-spawn": { "min_free_mb": 2000 }
+  }
+}
+```
+
+JSON has no comments, so: the backslash is written twice inside the strings, and `my-engine` and the numbers
+are placeholders.
+
+**Fails open.** An unparseable file, a non-object, a wrong type, a bad regular expression or an incomplete
+kind is skipped with a warning (the lower files still apply; `scripts/check-team.ps1` reports them: a bad
+project file is a problem, a bad user file a warning). If free memory cannot be read, the call is allowed
+with a warning. Warnings reach the model once per 12 hours per text (marker files in the temp folder).
+
+**Free memory** is the OS's "available" memory (free plus cache that can be dropped): Windows via
+`Microsoft.VisualBasic.Devices.ComputerInfo` (fallback CIM), Linux `MemAvailable` in `/proc/meminfo`,
+macOS `vm_stat` (free + inactive + speculative pages). Only the Windows reader has been run.
+
+**Cost, and why the shell entries have an `if`.** Every hook run is a fresh `powershell.exe`. Measured by
+hand on one Windows machine (Windows PowerShell 5.1): the ram-guard process takes about 510-540 ms in total,
+of which about 275 ms is the bare process start (the `guard-paths` no-op takes that long); so the
+script's own work is about 240-260 ms, mostly cold PowerShell and loading the JSON reader. That is too slow
+to pay on every Bash call, so the installer registers `Agent|Task` unconditionally, but the Bash and
+PowerShell entries with Claude Code's hook `if` filter
+([permission rule syntax](https://code.claude.com/docs/en/hooks)), e.g. `Bash(claude *)`, built from the
+`hook_if` command globs of the kinds in the shipped file and **your user file**. An ordinary command then
+does not start the hook at all (documented behaviour; not observed in a live session). Consequences:
+
+- After you change `hook_if` or add a shell kind to your own `ram-guard.json`, **re-run `install.ps1`** so
+  the filters are rebuilt (`-Update` is not needed for this, the hook entries are always refreshed).
+- A user kind with `patterns` but no `hook_if`, or `"scan_all_commands": true` in the user file, makes the
+  installer register one unfiltered `Bash|PowerShell` entry instead: every shell command pays about half a
+  second.
+- A **project** kind's patterns are only reached if its commands also pass a `hook_if` filter that is
+  installed, which the user-wide installer cannot know. Either add the project's commands to your user file
+  (`hook_if`), set `scan_all_commands`, or add a hook entry to the project's `.claude/settings.json`
+  that runs the installed `~/.claude/agent-crew/hooks/ram-guard.ps1` with an `if` rule for that command.
+  The `hook_if` in a project file is documentation for this; the installer does not read it.
+- A Claude Code version without the `if` field would run the entries unfiltered (slow, still correct).
+
+Tests fake the free memory with the environment variable `AGENT_CREW_FREE_MB` (a number, or
+`unreadable`) and the user folder with `AGENT_CREW_USER_DIR`; they are not meant for normal use.
 
 ## Cost ledger
 
@@ -238,7 +333,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run.ps1
 ```
 
 Plain PowerShell, no Pester. Runs the ledger and `check-team` on fixtures, every hook with sample
-stdin, and the installer against a temp folder (install twice, `-Update` with an edited file,
+stdin (the RAM guard with a faked free-memory value), and the installer against a temp folder (install twice, `-Update` with an edited file,
 `-Uninstall`).
 
 Opt-in end-to-end test of `crew-bootstrap` (NOT part of `run.ps1`, it spends real usage, capped
@@ -261,5 +356,11 @@ under test is the one in this checkout.
 - That `agent_type` is present in the hook input of the lead when it runs as the main session
   through the `agent` setting. The Claude Code binary documents it for `--agent` sessions and
   subagents; the guard does nothing if it is missing.
-- `install.sh` on a real macOS / Linux machine.
+- `install.sh` on a real macOS / Linux machine, and the Linux / macOS free-memory readers of the RAM guard.
+- That the RAM guard hook really blocks an Agent / Bash call in a live Claude Code session (the script is
+  tested by feeding it JSON), and whether the Agent tool is called `Agent` or `Task` in the hook input
+  (both are matched).
+- The RAM guard thresholds (1500 / 2500 MB): guesses.
+- That Claude Code really skips the Bash / PowerShell ram-guard entries for commands that do not match their
+  `if` filter (documented at code.claude.com/docs/en/hooks, not observed in a live session).
 - The numbers in `data/prices.json` and `templates/settings.local.json`.

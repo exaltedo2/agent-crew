@@ -219,6 +219,27 @@ try {
   $r = Invoke-Check @('-Project', $old, '-ClaudeHome', (Join-Path $old 'claude-home'))
   Check 'USER.md without an available-models list warns instead of skipping silently' (($r.Exit -eq 0) -and ($r.Out -match "WARN: no 'Available models' list"))
 
+  # ram-guard.json is validated when present: a bad project file fails, a bad user file only warns.
+  $rg = Join-Path $Work 'ramcfg'
+  Copy-Item -Recurse $ok $rg
+  New-Item -ItemType Directory -Force (Join-Path $rg 'claude-home\team') | Out-Null
+  $rgArgs = @('-Project', $rg, '-ClaudeHome', (Join-Path $rg 'claude-home'))
+  $r = Invoke-Check $rgArgs
+  Check 'check-team: no ram-guard.json anywhere is fine' (($r.Exit -eq 0) -and ($r.Out -notmatch 'ram-guard'))
+  [System.IO.File]::WriteAllText((Join-Path $rg '.claude\team\ram-guard.json'), '{ "kinds": { "my-engine": { "patterns": ["my-engine"], "min_free_mb": 4000 } } }')
+  $r = Invoke-Check $rgArgs
+  Check 'check-team: a valid project ram-guard.json passes' (($r.Exit -eq 0) -and ($r.Out -notmatch 'ram-guard')) $r.Out
+  [System.IO.File]::WriteAllText((Join-Path $rg '.claude\team\ram-guard.json'), '{ not json')
+  $r = Invoke-Check $rgArgs
+  Check 'check-team: a malformed project ram-guard.json fails' (($r.Exit -eq 1) -and ($r.Out -match 'FAIL: ram-guard: project config is not valid JSON')) $r.Out
+  [System.IO.File]::WriteAllText((Join-Path $rg '.claude\team\ram-guard.json'), '{ "kinds": { "x": { "patterns": ["a"], "min_free_mb": "lots" } } }')
+  $r = Invoke-Check $rgArgs
+  Check 'check-team: a bad min_free_mb in the project file fails and the incomplete kind is named' (($r.Exit -eq 1) -and ($r.Out -match "min_free_mb' must be a number") -and ($r.Out -match "WARN: ram-guard: kind 'x' is skipped by the hook: it needs min_free_mb")) $r.Out
+  Remove-Item (Join-Path $rg '.claude\team\ram-guard.json')
+  [System.IO.File]::WriteAllText((Join-Path $rg 'claude-home\team\ram-guard.json'), '{ "kinds": { "agent-spawn": { "min_free_mb": -5 } }, "enabled": "yes" }')
+  $r = Invoke-Check $rgArgs
+  Check 'check-team: a bad user ram-guard.json only warns' (($r.Exit -eq 0) -and ($r.Out -match "WARN: ram-guard: kind 'agent-spawn': 'min_free_mb'") -and ($r.Out -match "WARN: ram-guard: 'enabled'")) $r.Out
+
   # ------------------------------------------------------------------ hooks
   Section 'hooks'
   $hooks = Join-Path $Root 'hooks'
@@ -337,11 +358,189 @@ try {
   Check 'session-start resume: old marker asks for the retro' ($r.Out -match 'crew-retro' -and $r.Out -match '10 days')
   Set-Content -LiteralPath $marker -Value (Get-Date).ToString('o')
   $proj2 = Join-Path $proj '.claude/team/PROJECT.md'
-  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.2.2', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
+  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.3.0', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
   $r = Start-Hook 'startup'
-  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0.2.2')
+  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0.3.0')
   $r = Start-Hook 'startup' (ConvertTo-Slash $Work)
   Check 'session-start without .claude/team is silent' ($r.Out.Trim() -eq '')
+
+  # ram-guard: free memory is faked with AGENT_CREW_FREE_MB, the user's Claude folder with AGENT_CREW_USER_DIR
+  # and the temp folder (warn-once markers) is redirected, so nothing here reads the real ~/.claude.
+  $ramUser = Join-Path $Work 'ram-user'
+  $ramTemp = Join-Path $Work 'ram-temp'
+  New-Item -ItemType Directory -Force -Path (Join-Path $ramUser 'team'), $ramTemp | Out-Null
+  $ramUserFile = Join-Path $ramUser 'team\ram-guard.json'
+  $ramProjFile = Join-Path $proj '.claude\team\ram-guard.json'
+  $ramHook = Join-Path $hooks 'ram-guard.ps1'
+  $savedEnv = @{}
+  foreach ($n in 'AGENT_CREW_FREE_MB', 'AGENT_CREW_USER_DIR', 'TEMP', 'TMP') { $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n) }
+  function Ram($tool, $command, $free, $cwd = $Work) {
+    [Environment]::SetEnvironmentVariable('AGENT_CREW_FREE_MB', $free)
+    [Environment]::SetEnvironmentVariable('AGENT_CREW_USER_DIR', $ramUser)
+    [Environment]::SetEnvironmentVariable('TEMP', $ramTemp)
+    [Environment]::SetEnvironmentVariable('TMP', $ramTemp)
+    $json = @{ cwd = (ConvertTo-Slash $cwd); hook_event_name = 'PreToolUse'; tool_name = $tool; tool_input = @{ command = $command; prompt = 'do it' } } | ConvertTo-Json -Compress
+    return Invoke-Script $ramHook @() $json
+  }
+  function Clear-RamState {
+    Remove-Item -LiteralPath $ramUserFile, $ramProjFile -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -LiteralPath $ramTemp -Force | Remove-Item -Force
+  }
+  try {
+    $r = Ram 'Agent' '' '100'
+    Check 'ram-guard: Agent spawn with 100 MB free is blocked (exit 2)' ($r.Exit -eq 2) "$($r.Exit) $($r.Err)"
+    Check '... message names free MB, needed MB and the kind' ($r.Err -match "free RAM 100 MB < needed 1500 MB for 'agent-spawn'") $r.Err
+    Check '... message says wait, no retry loop, tell the user' (($r.Err -match 'wait') -and ($r.Err -match 'not retry in a loop') -and ($r.Err -match 'tell the user')) $r.Err
+    Check '... and says it never kills anything' ($r.Err -match 'never kills') $r.Err
+    Check 'ram-guard: a Task spawn is guarded too' ((Ram 'Task' '' '100').Exit -eq 2)
+    $r = Ram 'Agent' '' '5000'
+    Check 'ram-guard: Agent spawn with 5000 MB free is allowed and silent' (($r.Exit -eq 0) -and ($r.Out.Trim() -eq '') -and ($r.Err.Trim() -eq '')) "$($r.Out) $($r.Err)"
+    Check 'ram-guard: free memory exactly at the threshold is allowed' ((Ram 'Agent' '' '1500').Exit -eq 0)
+    Check 'ram-guard: free memory just below the threshold is blocked' ((Ram 'Agent' '' '1499.9').Exit -eq 2)
+    Check 'ram-guard: an ordinary command is never blocked, even with 1 MB free' ((Ram 'Bash' 'ls -la' '1').Exit -eq 0)
+    Check 'ram-guard: other tools are never blocked' ((Ram 'Read' '' '1').Exit -eq 0)
+    $r = Ram 'Bash' 'claude -p "summarise this"' '2000'
+    Check 'ram-guard: headless claude (Bash) needs 2500 MB and is blocked at 2000' (($r.Exit -eq 2) -and ($r.Err -match "needed 2500 MB for 'claude-headless'")) $r.Err
+    Check '... and is allowed at 3000' ((Ram 'Bash' 'claude -p "summarise this"' '3000').Exit -eq 0)
+    Check 'ram-guard: headless claude through PowerShell and with --print is blocked' ((Ram 'PowerShell' 'cd x; claude.exe --model sonnet --print hi' '2000').Exit -eq 2)
+    foreach ($cmd in 'claude -p "x"', 'cd a && claude --print', 'FOO=1 claude -p x', 'echo hi | claude -p', 'x=$(claude -p y)', "cd a`nclaude -p z", '/usr/local/bin/claude -p q', 'ls; claude --model sonnet -p hi', 'claude.exe -p hi') {
+      Check "ram-guard: true positive blocked: $($cmd -replace "`n", '\n')" ((Ram 'Bash' $cmd '2000').Exit -eq 2)
+    }
+    foreach ($cmd in 'git commit -m "document claude -p"', 'echo claude -p', "grep -r 'claude -p' docs", 'bash -c "claude -p hi"', 'claude doctor; echo -p', 'cat claude -p.txt', 'echo hi > claude -p', 'my-claude -p x', 'ls claude.md --print') {
+      Check "ram-guard: false positive not blocked: $cmd" ((Ram 'Bash' $cmd '1').Exit -eq 0)
+    }
+    Check 'ram-guard: interactive claude and other claude subcommands are not matched' (((Ram 'Bash' 'claude' '1').Exit -eq 0) -and ((Ram 'Bash' 'claude doctor' '1').Exit -eq 0) -and ((Ram 'Bash' 'echo not-claude -p' '1').Exit -eq 0))
+    Check 'ram-guard: invalid or empty stdin never blocks' (((Invoke-Script $ramHook @() 'not json').Exit -eq 0) -and ((Invoke-Script $ramHook @() '').Exit -eq 0))
+
+    # memory that cannot be read: allow, warn once
+    Clear-RamState
+    $r = Ram 'Agent' '' 'unreadable'
+    Check 'ram-guard: unreadable memory allows the call and warns via additionalContext' (($r.Exit -eq 0) -and ($r.Out -match 'additionalContext') -and ($r.Out -match 'could not be read')) $r.Out
+    $r = Ram 'Agent' '' 'unreadable'
+    Check '... and warns only once' (($r.Exit -eq 0) -and ($r.Out.Trim() -eq '')) $r.Out
+    Check '... a command that matches nothing never needs the memory (no warning)' ((Ram 'Bash' 'ls' 'unreadable').Out.Trim() -eq '')
+
+    # the real memory reading of this platform (no fake value): a tiny and an absurd threshold
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "kinds": { "agent-spawn": { "min_free_mb": 1 } } }')
+    $r = Ram 'Agent' '' ''
+    Check 'ram-guard: real free memory is read (needing 1 MB passes, no warning)' (($r.Exit -eq 0) -and ($r.Out.Trim() -eq '')) "$($r.Out) $($r.Err)"
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "kinds": { "agent-spawn": { "min_free_mb": 99999999 } } }')
+    $r = Ram 'Agent' '' ''
+    Check '... and needing 99999999 MB blocks, naming a plausible free amount' (($r.Exit -eq 2) -and ($r.Err -match 'free RAM [1-9]\d* MB < needed 99999999 MB')) $r.Err
+
+    # user override
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "kinds": { "agent-spawn": { "min_free_mb": 200 } } }')
+    Check 'ram-guard: user override lowers the Agent threshold (300 MB passes)' ((Ram 'Agent' '' '300').Exit -eq 0)
+    $r = Ram 'Agent' '' '100'
+    Check '... and 100 MB is blocked with the user number' (($r.Exit -eq 2) -and ($r.Err -match 'needed 200 MB')) $r.Err
+    Check '... kinds the user file does not mention keep their shipped values' ((Ram 'Bash' 'claude -p x' '2000').Exit -eq 2)
+
+    # project override: it may add kinds and RAISE thresholds, nothing else
+    [System.IO.File]::WriteAllText($ramProjFile, '{ "kinds": { "my-engine": { "description": "heavy", "patterns": ["my-engine\\s+--headless", "\\bmy-tests\\b"], "min_free_mb": 4000 }, "agent-spawn": { "min_free_mb": 800 } } }')
+    $r = Ram 'Bash' 'tools/my-engine --headless --run' '3000' $proj
+    Check 'ram-guard: project kind with its own patterns blocks (3000 < 4000)' (($r.Exit -eq 2) -and ($r.Err -match "needed 4000 MB for 'my-engine'")) $r.Err
+    Check '... the second pattern of the kind matches too' ((Ram 'PowerShell' 'run my-tests now' '3000' $proj).Exit -eq 2)
+    Check '... and passes with enough memory' ((Ram 'Bash' 'tools/my-engine --headless --run' '5000' $proj).Exit -eq 0)
+    Check '... a command that merely mentions the engine without the pattern passes' ((Ram 'Bash' 'ls my-engine-docs' '1' $proj).Exit -eq 0)
+    Check '... the project file is not applied outside that project' ((Ram 'Bash' 'tools/my-engine --headless --run' '1' $Work).Exit -eq 0)
+    Check 'ram-guard: a project can raise a threshold (user 200 -> project 800)' (((Ram 'Agent' '' '700' $proj).Exit -eq 2) -and ((Ram 'Agent' '' '900' $proj).Exit -eq 0))
+    $r = Ram 'Bash' 'claude -p "my-engine --headless"' '3000' $proj
+    Check 'ram-guard: when several kinds match, the highest threshold decides' (($r.Exit -eq 2) -and ($r.Err -match "needed 4000 MB for 'my-engine'")) $r.Err
+
+    # project trust boundary: no lowering, no switching off, no own cap, clamped to the user's project_max_mb
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramProjFile, '{ "enabled": false, "project_max_mb": 99999, "kinds": { "agent-spawn": { "min_free_mb": 10, "enabled": false }, "claude-headless": { "enabled": false, "min_free_mb": 1 } } }')
+    $r = Ram 'Agent' '' '1400' $proj
+    Check 'ram-guard: a project cannot lower a threshold, switch a kind or the guard off (still blocked at the shipped 1500)' (($r.Exit -eq 2) -and ($r.Err -match 'needed 1500 MB')) $r.Err
+    Check '... the shipped headless-claude kind also stays on' ((Ram 'Bash' 'claude -p x' '2400' $proj).Exit -eq 2)
+    $r = Ram 'Agent' '' '5000' $proj
+    $ctx = ''
+    try { $ctx = [string](($r.Out | ConvertFrom-Json).hookSpecificOutput.additionalContext) } catch { }
+    Check '... each ignored entry is reported once as a warning' (($r.Exit -eq 0) -and ($ctx -match "project config cannot change 'enabled'") -and ($ctx -match "project config cannot set 'project_max_mb'") -and ($ctx -match "kind 'agent-spawn': the project config can only raise min_free_mb") -and ($ctx -match "kind 'agent-spawn': the project config cannot switch a kind")) $r.Out
+    Check '... and not repeated on the next call' ((Ram 'Agent' '' '5000' $proj).Out.Trim() -eq '')
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramProjFile, '{ "kinds": { "my-engine": { "patterns": ["my-engine"], "min_free_mb": 20000 } } }')
+    $r = Ram 'Bash' 'run my-engine' '7000' $proj
+    Check 'ram-guard: a project threshold is clamped to project_max_mb (default 8000)' (($r.Exit -eq 2) -and ($r.Err -match 'needed 8000 MB') -and ($r.Err -match 'project_max_mb')) $r.Err
+    Check '... 8000 MB free is enough' ((Ram 'Bash' 'run my-engine' '8000' $proj).Exit -eq 0)
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "project_max_mb": 3000 }')
+    $r = Ram 'Bash' 'run my-engine' '2500' $proj
+    Check '... and the user can set the cap (3000 MB)' (($r.Exit -eq 2) -and ($r.Err -match "needed 3000 MB for 'my-engine'")) $r.Err
+    Check '... 3500 MB free passes under that cap' ((Ram 'Bash' 'run my-engine' '3500' $proj).Exit -eq 0)
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramProjFile, '{ "kinds": { "claude-headless": { "patterns": ["zzz-heavy"] }, "agent-spawn": { "patterns": ["agentpat"], "tools": ["Bash"] } } }')
+    Check 'ram-guard: a project adds patterns to a shipped kind without dropping the shipped one' (((Ram 'Bash' 'zzz-heavy go' '2000' $proj).Exit -eq 2) -and ((Ram 'Bash' 'claude -p x' '2000' $proj).Exit -eq 2))
+    Check '... tools are only added: the Agent kind still guards spawns and now also guards its own pattern in Bash' (((Ram 'Agent' '' '1400' $proj).Exit -eq 2) -and ((Ram 'Bash' 'agentpat' '1400' $proj).Exit -eq 2) -and ((Ram 'Bash' 'ls' '1' $proj).Exit -eq 0))
+
+    # a user may change everything the project may not
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "enabled": false }')
+    Check 'ram-guard: "enabled": false in the user file disables the whole guard' (((Ram 'Agent' '' '1').Exit -eq 0) -and ((Ram 'Bash' 'claude -p x' '1').Exit -eq 0))
+    [System.IO.File]::WriteAllText($ramProjFile, '{ "enabled": true }')
+    Check '... and a project file cannot switch it on again' ((Ram 'Agent' '' '1' $proj).Exit -eq 0)
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "kinds": { "claude-headless": { "enabled": false } } }')
+    Check 'ram-guard: the user can switch a kind off alone' (((Ram 'Bash' 'claude -p x' '1').Exit -eq 0) -and ((Ram 'Agent' '' '1').Exit -eq 2))
+
+    # kinds that cannot work are skipped, never "match everything"
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "kinds": { "all-bash": { "tools": ["Bash"], "min_free_mb": 9000 } } }')
+    $r = Ram 'Bash' 'ls' '1'
+    $ctx = ''
+    try { $ctx = [string](($r.Out | ConvertFrom-Json).hookSpecificOutput.additionalContext) } catch { }
+    Check 'ram-guard: a shell kind without patterns is skipped with a warning, not applied to every command' (($r.Exit -eq 0) -and ($ctx -match "kind 'all-bash' skipped: a kind for shell commands needs at least one valid pattern")) $r.Out
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "kinds": { "all-bash": { "patterns": ["["], "min_free_mb": 9000 } } }')
+    Check 'ram-guard: a kind whose only pattern is invalid is skipped too' ((Ram 'Bash' 'ls' '1').Exit -eq 0)
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "kinds": { "agent-spawn": { "patterns": ["something"] } } }')
+    Check 'ram-guard: a patterns-only override of the Agent kind does not turn it off (patterns do not apply to spawns)' (((Ram 'Agent' '' '100').Exit -eq 2) -and ((Ram 'Agent' '' '5000').Exit -eq 0))
+    Check '... and Bash commands matching those patterns are not guarded by it (it lists no shell tool)' ((Ram 'Bash' 'something' '1').Exit -eq 0)
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramProjFile, '{ "kinds": { "agent-spawn": { "patterns": ["something"] } } }')
+    Check 'ram-guard: the same from a project file keeps the Agent kind on' ((Ram 'Agent' '' '100' $proj).Exit -eq 2)
+
+    # a pathological pattern is cut off by the 200 ms match timeout
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "kinds": { "evil": { "patterns": ["(a+)+$"], "min_free_mb": 9000 } } }')
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $r = Ram 'Bash' (('a' * 45) + 'b') '1'
+    $ms = $sw.ElapsedMilliseconds
+    $ctx = ''
+    try { $ctx = [string](($r.Out | ConvertFrom-Json).hookSpecificOutput.additionalContext) } catch { }
+    Check 'ram-guard: a catastrophic pattern times out, is skipped with a warning and the call is allowed' (($r.Exit -eq 0) -and ($ctx -match "kind 'evil': pattern .* took over 200 ms") -and ($ms -lt 5000)) "$ms ms $($r.Out)"
+
+    # malformed config: warn and fall back, never block everything, never crash
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '{ this is not json')
+    $r = Ram 'Agent' '' '5000'
+    Check 'ram-guard: a malformed user file warns and the call is allowed' (($r.Exit -eq 0) -and ($r.Out -match 'not valid JSON')) $r.Out
+    Check '... the second call is silent (warned once)' ((Ram 'Agent' '' '5000').Out.Trim() -eq '')
+    $r = Ram 'Agent' '' '100'
+    Check '... and the shipped defaults still apply (blocks at 100 MB, message mentions the broken file)' (($r.Exit -eq 2) -and ($r.Err -match 'needed 1500 MB') -and ($r.Err -match 'not valid JSON')) $r.Err
+    Check '... a command that matches nothing is allowed' ((Ram 'Bash' 'ls' '1').Exit -eq 0)
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '{ "kinds": { "agent-spawn": { "min_free_mb": "lots" }, "bad": { "patterns": ["["], "min_free_mb": 10 }, "nominimum": { "patterns": ["x"] }, "notools": { "min_free_mb": 5 }, "str": 7, "ok": { "patterns": ["ok-cmd", "[", 5], "min_free_mb": 900, "tools": ["Bash"] } } }')
+    $r = Ram 'Bash' 'ls' '1'
+    $ctx = ''
+    try { $ctx = [string](($r.Out | ConvertFrom-Json).hookSpecificOutput.additionalContext) } catch { }
+    Check 'ram-guard: bad fields and kinds are skipped with warnings, nothing crashes' (($r.Exit -eq 0) -and ($ctx -match 'min_free_mb') -and ($ctx -match 'not a valid regular expression') -and ($ctx -match "kind 'str' .* must be an object") -and ($ctx -match "kind 'nominimum' skipped: it needs min_free_mb") -and ($ctx -match "kind 'notools' skipped: it needs")) $r.Out
+    Check '... a kind with a bad min_free_mb keeps the shipped number' ((Ram 'Agent' '' '1400').Exit -eq 2)
+    Check '... and the valid kind in the same file works (invalid patterns dropped)' (((Ram 'Bash' 'run ok-cmd' '800').Exit -eq 2) -and ((Ram 'Bash' 'run ok-cmd' '1000').Exit -eq 0))
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramUserFile, '[1, 2]')
+    $r = Ram 'Agent' '' '5000'
+    Check 'ram-guard: a config file that is not an object is ignored with a warning' (($r.Exit -eq 0) -and ($r.Out -match 'must be a JSON object')) $r.Out
+    Clear-RamState
+    [System.IO.File]::WriteAllText($ramProjFile, '{ broken')
+    $r = Ram 'Agent' '' '5000' $proj
+    Check 'ram-guard: a malformed project file warns and is ignored' (($r.Exit -eq 0) -and ($r.Out -match 'project config is not valid JSON')) $r.Out
+    Clear-RamState
+  } finally {
+    foreach ($n in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($n, $savedEnv[$n]) }
+  }
 
   # ------------------------------------------------------------------ installer
   Section 'install.ps1'
@@ -356,17 +555,23 @@ try {
   Check 'install exits 0' ($r.Exit -eq 0) ($r.Out + $r.Err)
   Check 'agents installed' ((Test-Path "$home1\agents\lead.md") -and (Test-Path "$home1\agents\reviewer.md"))
   Check 'skills installed' (Test-Path "$home1\skills\crew-retro\SKILL.md")
-  Check 'runtime payload installed' ((Test-Path "$home1\agent-crew\hooks\guard-paths.ps1") -and (Test-Path "$home1\agent-crew\scripts\ledger.ps1") -and (Test-Path "$home1\agent-crew\VERSION") -and (Test-Path "$home1\agent-crew\installed.json"))
+  Check 'runtime payload installed' ((Test-Path "$home1\agent-crew\hooks\guard-paths.ps1") -and (Test-Path "$home1\agent-crew\hooks\ram-guard.ps1") -and (Test-Path "$home1\agent-crew\data\ram-guard.json") -and (Test-Path "$home1\agent-crew\scripts\ledger.ps1") -and (Test-Path "$home1\agent-crew\VERSION") -and (Test-Path "$home1\agent-crew\installed.json"))
   Check 'USER.md copied when missing' (Test-Path "$home1\team\USER.md")
   Check 'agents carry no hooks front matter and no tokens (the guard is registered once, in settings.json)' (-not (Select-String -Path "$home1\agents\*.md" -Pattern '^hooks:|@@HOOK' -Quiet))
   Check 'a backup of settings.json was made' (@(Get-ChildItem $home1 -Filter 'settings.json.bak-*').Count -eq 1)
   $s = Get-Content -Raw "$home1\settings.json" | ConvertFrom-Json
   Check 'settings: own keys kept' (($s.model -eq 'opus') -and ($s.other.keep -eq 'me'))
-  Check 'settings: user hook kept' (@($s.hooks.PreToolUse | Where-Object { $_.matcher -eq 'Bash' }).Count -eq 1)
-  foreach ($ev in 'PreToolUse', 'PostToolUse', 'PreCompact', 'PostCompact', 'SessionStart') {
-    $n = @(@($s.hooks.$ev) | ForEach-Object { @($_.hooks) } | Where-Object { $_.command -match [regex]::Escape("$home1" + [char]92 + 'agent-crew') }).Count
-    Check "settings: exactly one $ev entry of agent-crew" ($n -eq 1) "found $n"
+  Check 'settings: user hook kept' (@($s.hooks.PreToolUse | Where-Object { $_.matcher -eq 'Bash' -and $_.hooks[0].command -eq 'echo mine' }).Count -eq 1)
+  foreach ($hk in @(@('PreToolUse', 'guard-paths'), @('PostToolUse', 'check-caps'), @('PreCompact', 'pre-compact'), @('PostCompact', 'post-compact'), @('SessionStart', 'session-start'))) {
+    $n = @(@($s.hooks.($hk[0])) | ForEach-Object { @($_.hooks) } | Where-Object { $_.command -match [regex]::Escape("$home1" + [char]92 + 'agent-crew') -and $_.command -match [regex]::Escape($hk[1] + '.ps1') }).Count
+    Check "settings: exactly one $($hk[0]) entry for $($hk[1])" ($n -eq 1) "found $n"
   }
+  $ramHooks = @(@($s.hooks.PreToolUse) | Where-Object { $_.hooks[0].command -match 'ram-guard\.ps1' })
+  Check 'settings: ram-guard has one unconditional entry for Agent|Task' (@($ramHooks | Where-Object { $_.matcher -eq 'Agent|Task' -and -not $_.hooks[0].PSObject.Properties['if'] }).Count -eq 1)
+  foreach ($rule in 'Bash(claude *)', 'Bash(claude.exe *)', 'PowerShell(claude *)', 'PowerShell(claude.cmd *)') {
+    Check "settings: ram-guard shell entry filtered with if = $rule" (@($ramHooks | Where-Object { $_.hooks[0].PSObject.Properties['if'] -and $_.hooks[0].if -eq $rule -and $_.matcher -eq $rule.Split('(')[0] }).Count -eq 1)
+  }
+  Check 'settings: no unconditional ram-guard entry for every shell command' (@($ramHooks | Where-Object { $_.matcher -match 'Bash' -and -not $_.hooks[0].PSObject.Properties['if'] }).Count -eq 0)
   $before = Get-Content -Raw "$home1\settings.json"
   $r = Invoke-Script $install @('-ClaudeHome', $home1)
   Check 'second install is idempotent (settings.json byte-identical)' ((Get-Content -Raw "$home1\settings.json") -eq $before)
@@ -436,6 +641,35 @@ try {
   [void](Invoke-Script $install @('-ClaudeHome', $home5, '-NoSettings', '-Uninstall'))
   Check 'uninstall keeps the agents, skills and team folders' ((Test-Path "$home5\agents") -and (Test-Path "$home5\skills") -and (Test-Path "$home5\team"))
   Check '... but removes the crew skill folders and agent-crew' (-not (Test-Path "$home5\skills\crew-retro") -and -not (Test-Path "$home5\agent-crew"))
+
+  # ram-guard hook entries follow the user's ram-guard.json (hook_if globs, scan_all_commands)
+  $home7 = Join-Path $Work 'claude-home7'
+  New-Item -ItemType Directory -Path "$home7\team" | Out-Null
+  function Get-RamEntries($homeDir) {
+    $st = Get-Content -Raw "$homeDir\settings.json" | ConvertFrom-Json
+    return @(@($st.hooks.PreToolUse) | Where-Object { $_ -and $_.hooks -and ($_.hooks[0].command -match 'ram-guard\.ps1') } | ForEach-Object { '{0}|{1}' -f $_.matcher, $(if ($_.hooks[0].PSObject.Properties['if']) { $_.hooks[0].if } else { '' }) })
+  }
+  [void](Invoke-Script $install @('-ClaudeHome', $home7))
+  $e = Get-RamEntries $home7
+  Check 'ram-guard entries: default is Agent|Task plus claude-filtered Bash and PowerShell entries (7)' (($e.Count -eq 7) -and ($e -contains 'Agent|Task|') -and ($e -contains 'Bash|Bash(claude *)') -and ($e -contains 'PowerShell|PowerShell(claude.exe *)')) ($e -join '; ')
+  [System.IO.File]::WriteAllText("$home7\team\ram-guard.json", '{ "kinds": { "my-engine": { "patterns": ["my-engine"], "hook_if": ["my-engine *"], "min_free_mb": 100 } } }')
+  [void](Invoke-Script $install @('-ClaudeHome', $home7))
+  $e = Get-RamEntries $home7
+  Check 'ram-guard entries: a user kind with hook_if adds filtered entries and no duplicates' (($e.Count -eq 9) -and ($e -contains 'Bash|Bash(my-engine *)') -and ($e -contains 'PowerShell|PowerShell(my-engine *)') -and ($e -contains 'Bash|Bash(claude *)')) ($e -join '; ')
+  [System.IO.File]::WriteAllText("$home7\team\ram-guard.json", '{ "kinds": { "my-engine": { "patterns": ["my-engine"], "min_free_mb": 100 } } }')
+  [void](Invoke-Script $install @('-ClaudeHome', $home7))
+  $e = Get-RamEntries $home7
+  Check 'ram-guard entries: a user shell kind without hook_if gives one unconditional Bash|PowerShell entry instead' (($e.Count -eq 2) -and ($e -contains 'Agent|Task|') -and ($e -contains 'Bash|PowerShell|')) ($e -join '; ')
+  [System.IO.File]::WriteAllText("$home7\team\ram-guard.json", '{ "scan_all_commands": true }')
+  [void](Invoke-Script $install @('-ClaudeHome', $home7))
+  $e = Get-RamEntries $home7
+  Check 'ram-guard entries: "scan_all_commands": true does the same' (($e.Count -eq 2) -and ($e -contains 'Bash|PowerShell|')) ($e -join '; ')
+  Remove-Item "$home7\team\ram-guard.json"
+  [void](Invoke-Script $install @('-ClaudeHome', $home7))
+  $e = Get-RamEntries $home7
+  Check 'ram-guard entries: removing the file brings the filtered entries back' ($e.Count -eq 7) ($e -join '; ')
+  $r = Invoke-Script $install @('-ClaudeHome', $home7, '-Uninstall')
+  Check 'ram-guard entries: uninstall removes all of them' (-not (Test-Path "$home7\settings.json") -or (@(Get-RamEntries $home7).Count -eq 0))
 
   # at most 3 settings.json backups
   $home6 = Join-Path $Work 'claude-home6'
