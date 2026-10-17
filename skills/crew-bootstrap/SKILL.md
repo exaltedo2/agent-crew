@@ -42,6 +42,16 @@ Do not run the checks now. Do not edit project files.
 
 Keep `~/.claude/team/USER.md` in mind: it already answers the chat language and attribution.
 
+**Non-interactive path (opt-in, not the default).** If the request already contains the answers
+to these questions, or AskUserQuestion is not available (for example a headless `claude -p`
+run, as in `tests/e2e-bootstrap.ps1`), do not ask. Use the answers given; for each question
+without one, use a default: deliverable = "a change on a branch with a pull request, checks
+passing"; correctness = the commands found in step 1 (none found: say so in PROJECT.md);
+risky areas = none known; languages = English for chat and repository; approval = the user
+merges, nothing goes straight to the default branch (`direct_to_main: []`). Skip step 3's
+question and take the minimal core roster (plus any role the request names). Say in the final
+report which answers were given and which were defaulted. When interactive, always ask.
+
 ## 3. Propose the roster (one message, the user answers in one line)
 
 Minimal core: `lead`, `coder`, `reviewer`, `scout`. Add `thinker` and `architect` only if
