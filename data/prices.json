@@ -1,0 +1,33 @@
+{
+  "status": "GUESS, verify before trusting any cost figure",
+  "as_of": "2026-10-17",
+  "unit": "USD per million tokens",
+  "source": "https://docs.claude.com/en/docs/about-claude/pricing (could not be fetched when this file was written; values are the best known list prices of the 4.5-class models and are assumed to hold for newer model ids)",
+  "note": "cache_write_5m is 1.25x input, cache_write_1h is 2x input, cache_read is 0.1x input. A model id is matched to the first family whose prefix it starts with.",
+  "families": {
+    "opus": {
+      "prefixes": ["claude-opus", "opus"],
+      "input": 5.0,
+      "output": 25.0,
+      "cache_write_5m": 6.25,
+      "cache_write_1h": 10.0,
+      "cache_read": 0.5
+    },
+    "sonnet": {
+      "prefixes": ["claude-sonnet", "sonnet"],
+      "input": 3.0,
+      "output": 15.0,
+      "cache_write_5m": 3.75,
+      "cache_write_1h": 6.0,
+      "cache_read": 0.3
+    },
+    "haiku": {
+      "prefixes": ["claude-haiku", "haiku"],
+      "input": 1.0,
+      "output": 5.0,
+      "cache_write_5m": 1.25,
+      "cache_write_1h": 2.0,
+      "cache_read": 0.1
+    }
+  }
+}
