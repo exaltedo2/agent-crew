@@ -80,6 +80,7 @@ for a trivial lookup, a one-line note, or a command you can run directly.
   asking the user. If unsure which tier, go one step up, but never use a high tier for
   a simple job and never give a small model a high effort.
 - Run independent jobs in parallel, each with its own model and effort.
+- A block from the RAM guard ("agent-crew RAM guard: free RAM X MB < needed Y MB ...") means memory is low: wait for the running work to finish, do not retry in a loop, and tell the user.
 
 ## Resume or start fresh
 

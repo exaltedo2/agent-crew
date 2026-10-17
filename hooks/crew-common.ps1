@@ -40,7 +40,7 @@ function Get-UserClaudeDirs {
     if ($env:CLAUDE_CONFIG_DIR) { $dirs.Add([System.IO.Path]::GetFullPath($env:CLAUDE_CONFIG_DIR)) }
     # This script lives in the agent-crew folder inside the Claude home when installed.
     $crew = Split-Path -Parent $PSScriptRoot
-    if ((Split-Path -Leaf $crew) -eq 'agent-crew' -and (Test-Path -LiteralPath (Join-Path $crew 'installed.json'))) { $dirs.Add([System.IO.Path]::GetFullPath((Split-Path -Parent $crew))) }
+    if ((Split-Path -Leaf $crew) -eq 'agent-crew' -and [System.IO.File]::Exists((Join-Path $crew 'installed.json'))) { $dirs.Add([System.IO.Path]::GetFullPath((Split-Path -Parent $crew))) }
   } catch { }
   return @($dirs | ForEach-Object { $_.TrimEnd([char]92, [char]47).ToLowerInvariant() })
 }
@@ -83,7 +83,7 @@ function Find-TeamRoot {
   $userDirs = Get-UserClaudeDirs
   while ($dir) {
     $claude = (Join-Path $dir '.claude')
-    if ((Test-Path -LiteralPath (Join-Path $claude 'team') -PathType Container) -and
+    if ([System.IO.Directory]::Exists((Join-Path $claude 'team')) -and
         ($userDirs -notcontains $claude.TrimEnd([char]92, [char]47).ToLowerInvariant())) { return $dir }
     $parent = Split-Path -Parent $dir
     if ([string]::IsNullOrEmpty($parent) -or $parent -eq $dir) { break }
@@ -217,4 +217,73 @@ function Get-AgentName {
   $idx = $name.LastIndexOf(':')
   if ($idx -ge 0) { $name = $name.Substring($idx + 1) }
   return $name.Trim().ToLowerInvariant()
+}
+
+# ---- RAM guard config (used by hooks/ram-guard.ps1 and scripts/check-team.ps1) ----
+
+function Get-RamGuardUserDir {
+  # The user's Claude folder for ram-guard.json. AGENT_CREW_USER_DIR is a test hook.
+  if ($env:AGENT_CREW_USER_DIR) { return $env:AGENT_CREW_USER_DIR }
+  if ($env:CLAUDE_CONFIG_DIR) { return $env:CLAUDE_CONFIG_DIR }
+  if ($HOME) { return (Join-Path $HOME '.claude') }
+  return $null
+}
+
+function Test-IsNumber($Value) {
+  return (($Value -is [int]) -or ($Value -is [long]) -or ($Value -is [double]) -or ($Value -is [decimal]))
+}
+
+function Read-RamLayer {
+  # Reads one config file and merges it into $Config. Problems become warnings; they never throw.
+  param([hashtable]$Config, [string]$Path, [string]$Label, $Warnings)
+  if (-not [System.IO.File]::Exists($Path)) { return }
+  $root = $null
+  try { $root = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json }
+  catch { $Warnings.Add("ram-guard: $Label config is not valid JSON, ignored ($Path)."); return }
+  if ($root -isnot [System.Management.Automation.PSCustomObject]) { $Warnings.Add("ram-guard: $Label config must be a JSON object, ignored ($Path)."); return }
+
+  if ($root.PSObject.Properties['enabled']) {
+    if ($root.enabled -is [bool]) { $Config.enabled = $root.enabled }
+    else { $Warnings.Add("ram-guard: 'enabled' in the $Label config must be true or false, ignored ($Path).") }
+  }
+  if (-not $root.PSObject.Properties['kinds'] -or $null -eq $root.kinds) { return }
+  if ($root.kinds -isnot [System.Management.Automation.PSCustomObject]) { $Warnings.Add("ram-guard: 'kinds' in the $Label config must be an object, ignored ($Path)."); return }
+
+  foreach ($prop in $root.kinds.PSObject.Properties) {
+    $name = $prop.Name
+    $entry = $prop.Value
+    if ($entry -isnot [System.Management.Automation.PSCustomObject]) { $Warnings.Add("ram-guard: kind '$name' in the $Label config must be an object, skipped ($Path)."); continue }
+    if ($Config.kinds.Contains($name)) { $kind = $Config.kinds[$name] }
+    else { $kind = @{ enabled = $true; min_free_mb = $null; tools = @(); patterns = @() } }
+
+    if ($entry.PSObject.Properties['enabled']) {
+      if ($entry.enabled -is [bool]) { $kind.enabled = $entry.enabled }
+      else { $Warnings.Add("ram-guard: kind '$name': 'enabled' must be true or false, ignored ($Label config).") }
+    }
+    if ($entry.PSObject.Properties['min_free_mb']) {
+      if ((Test-IsNumber $entry.min_free_mb) -and ([double]$entry.min_free_mb -gt 0)) { $kind.min_free_mb = [double]$entry.min_free_mb }
+      else { $Warnings.Add("ram-guard: kind '$name': 'min_free_mb' must be a number above 0, ignored ($Label config).") }
+    }
+    if ($entry.PSObject.Properties['tools']) {
+      $list = @($entry.tools)
+      $names = @()
+      $badTools = ($list.Count -eq 0)
+      foreach ($t in $list) {
+        if (($t -isnot [string]) -or [string]::IsNullOrWhiteSpace($t)) { $badTools = $true; break }
+        $names += $t.Trim()
+      }
+      if (-not $badTools) { $kind.tools = $names }
+      else { $Warnings.Add("ram-guard: kind '$name': 'tools' must be a list of tool names, ignored ($Label config).") }
+    }
+    if ($entry.PSObject.Properties['patterns']) {
+      $good = @()
+      foreach ($pat in @($entry.patterns)) {
+        if (($pat -isnot [string]) -or [string]::IsNullOrWhiteSpace($pat)) { $Warnings.Add("ram-guard: kind '$name': a pattern must be a non-empty string, skipped ($Label config)."); continue }
+        try { [void][regex]::IsMatch('', $pat); $good += $pat }
+        catch { $Warnings.Add("ram-guard: kind '$name': pattern '$pat' is not a valid regular expression, skipped ($Label config).") }
+      }
+      $kind.patterns = $good
+    }
+    $Config.kinds[$name] = $kind
+  }
 }
