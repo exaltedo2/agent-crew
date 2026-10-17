@@ -141,6 +141,7 @@ try {
   $r = Guard 'lead' "$pj/src/a.txt"
   Check 'guard: lead blocked outside .claude/team (exit 2 + reason)' (($r.Exit -eq 2) -and ($r.Err -match 'lead'))
   Check 'guard: lead may write .claude/team/state.md' ((Guard 'lead' "$pj/.claude/team/state.md").Exit -eq 0)
+  Check 'guard: lead blocked on alternate data streams' (((Guard 'lead' "$pj/.claude/team/PROJECT.md::`$DATA").Exit -eq 2) -and ((Guard 'lead' "$pj/.claude/team/state.md:stream").Exit -eq 2))
   Check 'guard: lead may write a lead_writable glob' ((Guard 'lead' "$pj/docs/ROADMAP.md").Exit -eq 0)
   Check 'guard: lead can never write settings, even if lead_writable lists it' (((Guard 'lead' "$pj/.claude/settings.local.json").Exit -eq 2) -and ((Guard 'lead' "$pj/.claude/settings.json").Exit -eq 2))
   Check 'guard: lead can never write PROJECT.md' (((Guard 'lead' "$pj/.claude/team/PROJECT.md").Exit -eq 2) -and ((Guard 'lead' "$pj/.claude/team/project.md").Exit -eq 2))
@@ -325,14 +326,14 @@ try {
   New-Item -ItemType Directory -Path $home3 | Out-Null
   Set-Content -LiteralPath "$home3\settings.json" -Value "{ // comment`n  `"a`": 1 }"
   $r = Invoke-Script $install @('-ClaudeHome', $home3)
-  Check 'invalid settings.json: install refuses with exit 1 and a message' (($r.Exit -ne 0) -and ($r.Out -match 'Nothing was changed'))
+  Check 'invalid settings.json: install refuses with exit 1 and a message' (($r.Exit -eq 1) -and ($r.Out -match 'Nothing was changed'))
   Check '... and leaves no half-install behind' (-not (Test-Path "$home3\agents") -and -not (Test-Path "$home3\agent-crew") -and -not (Test-Path "$home3\skills") -and ((Get-Content -Raw "$home3\settings.json") -match 'comment'))
   # ... also for -Uninstall: files stay, so the hook entries never point to deleted scripts
   $home4 = Join-Path $Work 'claude-home4'
   [void](Invoke-Script $install @('-ClaudeHome', $home4))
   Add-Content -LiteralPath "$home4\settings.json" -Value '// trailing comment'
   $r = Invoke-Script $install @('-ClaudeHome', $home4, '-Uninstall')
-  Check 'invalid settings.json: uninstall refuses and removes nothing' (($r.Exit -ne 0) -and (Test-Path "$home4\agents\lead.md") -and (Test-Path "$home4\agent-crew\hooks\guard-paths.ps1") -and (Test-Path "$home4\agent-crew\installed.json"))
+  Check 'invalid settings.json: uninstall refuses and removes nothing' (($r.Exit -eq 1) -and (Test-Path "$home4\agents\lead.md") -and (Test-Path "$home4\agent-crew\hooks\guard-paths.ps1") -and (Test-Path "$home4\agent-crew\installed.json"))
 
   # empty-folder cleanup never removes agents/, skills/ or team/
   $home5 = Join-Path $Work 'claude-home5'

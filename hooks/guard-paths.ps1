@@ -66,6 +66,12 @@ try {
   # Resolve junctions / symlinks (also in parent folders) on both sides before comparing.
   $abs = $file
   if (-not [System.IO.Path]::IsPathRooted($abs)) { $abs = Join-Path $cwd $abs }
+  # NTFS alternate data streams (PROJECT.md::$DATA) write the main stream: reject any ':' after the drive letter.
+  if ($abs.Substring([Math]::Min(2, $abs.Length)).Contains(':')) {
+    [Console]::Error.WriteLine("agent-crew: '$agent' may not write to a path containing ':' after the drive letter (alternate data stream): $file")
+    exit 2
+  }
+
   $realRoot = Resolve-RealPath $root
   $realFile = Resolve-RealPath $abs
   $rel = Get-RelativeToRoot -Root $realRoot -File $realFile -Cwd $cwd
