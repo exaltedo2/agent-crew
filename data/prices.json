@@ -1,0 +1,18 @@
+{
+  "status": "GUESS, verify before trusting any cost figure",
+  "as_of": "2026-10-17",
+  "unit": "USD per million tokens",
+  "source": "https://docs.claude.com/en/docs/about-claude/pricing (could not be fetched when this file was written; values are best-known list prices from memory)",
+  "note": "A model id is priced by the entry with the LONGEST matching prefix. Entries with fallback=true only match by family; the ledger warns for every model priced that way because its exact price is unknown. cache_write_5m is 1.25x input, cache_write_1h is 2x, cache_read is 0.1x. Long-context and fast-mode surcharges are not modelled.",
+  "models": [
+    { "name": "opus-4.5", "prefixes": ["claude-opus-4-5"], "fallback": false, "input": 5.0, "output": 25.0, "cache_write_5m": 6.25, "cache_write_1h": 10.0, "cache_read": 0.5 },
+    { "name": "opus-legacy", "prefixes": ["claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-2", "claude-3-opus"], "fallback": false, "input": 15.0, "output": 75.0, "cache_write_5m": 18.75, "cache_write_1h": 30.0, "cache_read": 1.5 },
+    { "name": "sonnet", "prefixes": ["claude-sonnet-4", "claude-3-7-sonnet", "claude-3-5-sonnet"], "fallback": false, "input": 3.0, "output": 15.0, "cache_write_5m": 3.75, "cache_write_1h": 6.0, "cache_read": 0.3 },
+    { "name": "haiku-4.5", "prefixes": ["claude-haiku-4-5"], "fallback": false, "input": 1.0, "output": 5.0, "cache_write_5m": 1.25, "cache_write_1h": 2.0, "cache_read": 0.1 },
+    { "name": "haiku-3.5", "prefixes": ["claude-3-5-haiku"], "fallback": false, "input": 0.8, "output": 4.0, "cache_write_5m": 1.0, "cache_write_1h": 1.6, "cache_read": 0.08 },
+    { "name": "haiku-3", "prefixes": ["claude-3-haiku"], "fallback": false, "input": 0.25, "output": 1.25, "cache_write_5m": 0.3, "cache_write_1h": 0.5, "cache_read": 0.03 },
+    { "name": "opus (family fallback)", "prefixes": ["claude-opus", "opus"], "fallback": true, "input": 5.0, "output": 25.0, "cache_write_5m": 6.25, "cache_write_1h": 10.0, "cache_read": 0.5 },
+    { "name": "sonnet (family fallback)", "prefixes": ["claude-sonnet", "sonnet"], "fallback": true, "input": 3.0, "output": 15.0, "cache_write_5m": 3.75, "cache_write_1h": 6.0, "cache_read": 0.3 },
+    { "name": "haiku (family fallback)", "prefixes": ["claude-haiku", "haiku"], "fallback": true, "input": 1.0, "output": 5.0, "cache_write_5m": 1.25, "cache_write_1h": 2.0, "cache_read": 0.1 }
+  ]
+}
