@@ -75,9 +75,11 @@ loop: write every draft to ONE new folder `crew-bootstrap-drafts/` in the projec
 the project but outside `.claude/`; headless runs refuse writes outside the project, temp
 folders included),
 each file under its target name relative to `.claude/team/` (`PROJECT.md`, `routing.md`,
-`roster.md`, `state.md`), including `PROJECT.md` (no `coder` is needed just to park a draft).
+`roster.md`, `state.md`), including `PROJECT.md` under exactly that name, not `bootstrap-PROJECT.md` (that name is for the
+`reports/` drafts below, not for this folder; no `coder` is needed just to park a draft).
 End the reply with a line `DRAFTS: <absolute folder path>` and tell the user to move the files
-into `.claude/team/`, delete the folder, and not commit it; or hand the placement to the `coder` with the absolute draft paths, as for
+into `.claude/team/`, delete the folder, and in so many words to add `crew-bootstrap-drafts/` to
+`.gitignore` (the lead does not write `.gitignore` itself) or delete the folder before any commit; or hand the placement to the `coder` with the absolute draft paths, as for
 the files below.
 
 The lead may NOT write `PROJECT.md`, `.claude/settings.local.json` or `.gitignore`. Instead it

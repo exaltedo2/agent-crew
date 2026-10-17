@@ -85,40 +85,67 @@ function Stop-Tree([int]$RootId) {
   try { & taskkill /T /F /PID $RootId 2>&1 | Out-Null } finally { $ErrorActionPreference = $old }
 }
 function ConvertTo-ArgString([string[]]$Items) {
-  ($Items | ForEach-Object { '"' + (($_ -replace '(\*)"', '$1$1\"') -replace '(\+)$', '$1$1') + '"' }) -join ' '
+  # Windows command-line quoting: backslashes before a quote are doubled, a quote is escaped,
+  # and backslashes at the end are doubled so they do not escape the closing quote.
+  ($Items | ForEach-Object { '"' + (($_ -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"' }) -join ' '
 }
-# Runs a program as a watched process; kills its whole tree over the memory/time limit or on any error.
-function Invoke-Guarded([string]$File, [string[]]$ArgItems, [string]$WorkDir, [int]$MaxMB, [int]$TimeoutS, [string]$StdIn = '') {
-  $psi = New-Object System.Diagnostics.ProcessStartInfo
-  $psi.FileName = $File
-  $psi.Arguments = ConvertTo-ArgString $ArgItems
-  $psi.WorkingDirectory = $WorkDir
-  $psi.UseShellExecute = $false
-  $psi.RedirectStandardOutput = $true
-  $psi.RedirectStandardError = $true
-  $psi.RedirectStandardInput = $true
-  $psi.CreateNoWindow = $true
-  $proc = [System.Diagnostics.Process]::Start($psi)
-  if ($StdIn) { $proc.StandardInput.Write($StdIn) }
-  $proc.StandardInput.Close()
-  $outTask = $proc.StandardOutput.ReadToEndAsync()
-  $errTask = $proc.StandardError.ReadToEndAsync()
-  $reason = ''
-  $peak = 0
+# cmd.exe strips the first and last quote of /c's argument unless /s is used with the whole thing wrapped.
+function ConvertTo-CmdArgString([string]$CmdFile, [string[]]$Items) {
+  '/s /c "' + (ConvertTo-ArgString (@($CmdFile) + $Items)) + '"'
+}
+# [pid, start time, memory] of the process and all its descendants, to kill leftovers after the root has exited.
+function Get-TreeSnapshot([int]$RootId) {
+  $snap = @()
+  foreach ($id in (Get-Tree $RootId)) {
+    $pr = Get-Process -Id $id -ErrorAction SilentlyContinue
+    if ($pr) { try { $snap += [pscustomobject]@{ Id = $id; Start = $pr.StartTime; MB = $pr.WorkingSet64 } } catch { } }
+  }
+  return $snap
+}
+function Stop-Leftovers($Snapshot, [datetime]$Began) {
+  foreach ($e in $Snapshot) {
+    $pr = Get-Process -Id $e.Id -ErrorAction SilentlyContinue
+    # Same start time as when seen = same process (a reused PID has a different one).
+    if ($pr -and $e.Start -ge $Began) { try { if ($pr.StartTime -eq $e.Start) { Stop-Process -Id $e.Id -Force -ErrorAction SilentlyContinue } } catch { } }
+  }
+}
+# Runs a program as a watched process; kills its whole tree over the memory/time limit, on any error,
+# and any descendant that outlives the root. $ArgString is the finished command line.
+function Invoke-Guarded([string]$File, [string]$ArgString, [string]$WorkDir, [int]$MaxMB, [int]$TimeoutS, [string]$StdIn = '', [int]$PollMs = 1000) {
+  $began = (Get-Date).AddSeconds(-1)
+  $proc = $null; $outTask = $null; $errTask = $null
+  $reason = ''; $peak = 0; $snap = @()
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $File
+    $psi.Arguments = $ArgString
+    $psi.WorkingDirectory = $WorkDir
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardInput = $true
+    $psi.CreateNoWindow = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    if ($StdIn) { $proc.StandardInput.Write($StdIn) }
+    $proc.StandardInput.Close()
     while (-not $proc.HasExited) {
-      Start-Sleep -Seconds 2
-      $mb = Get-TreeMB $proc.Id
+      Start-Sleep -Milliseconds $PollMs
+      $snap = Get-TreeSnapshot $proc.Id
+      $mb = [math]::Round((($snap | Measure-Object -Property MB -Sum).Sum) / 1MB)
       if ($mb -gt $peak) { $peak = $mb }
       if ($mb -gt $MaxMB) { $reason = "memory $mb MB over limit $MaxMB MB"; break }
       if ($sw.Elapsed.TotalSeconds -gt $TimeoutS) { $reason = "timeout after $TimeoutS s"; break }
     }
   } finally {
-    # Ctrl+C, error or limit: never leave the tree running.
-    if (-not $proc.HasExited) { Stop-Tree $proc.Id }
+    # Ctrl+C, error, limit or normal exit: never leave the tree (or a child that outlived the root) running.
+    if ($proc) {
+      if (-not $proc.HasExited) { Stop-Tree $proc.Id }
+      Stop-Leftovers $snap $began
+    }
   }
-  if ($reason) { Stop-Tree $proc.Id }
   [void]$proc.WaitForExit(10000)
   $out = ''
   if ($outTask.Wait(5000)) { $out = $outTask.Result }
@@ -129,13 +156,39 @@ function Invoke-Guarded([string]$File, [string[]]$ArgItems, [string]$WorkDir, [i
 function Get-FreeMB { [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1KB) }
 
 if ($GuardSelfTest) {
-  # Parent powershell starts a child powershell that allocates ~600 MB; limit is 300 MB.
-  $code = '$h = New-Object System.Collections.ArrayList; Start-Process powershell -ArgumentList ''-NoProfile'',''-Command'',''$a=New-Object byte[] 400MB; for($i=0;$i -lt $a.Length;$i+=4096){$a[$i]=1}; Start-Sleep 120'' ; $a=New-Object byte[] 400MB; for($i=0;$i -lt $a.Length;$i+=4096){$a[$i]=1}; Start-Sleep 120'
-  $r = Invoke-Guarded 'powershell.exe' @('-NoProfile', '-Command', $code) $env:TEMP 300 60
+  $bad = 0
+  function Expect([string]$Name, [bool]$Ok, [string]$Detail = '') {
+    if ($Ok) { Write-Host "  ok   $Name" } else { Write-Host "  FAIL $Name $Detail" -ForegroundColor Red; $script:bad++ }
+  }
+  # 1. memory: parent + grandchild allocate ~800 MB, limit 300 MB -> whole tree killed.
+  $alloc = '$a=New-Object byte[] 400MB; for($i=0;$i -lt $a.Length;$i+=4096){$a[$i]=1}; Start-Sleep 120'
+  $code = "Start-Process powershell -ArgumentList '-NoProfile','-Command','$alloc'; $alloc"
+  $r = Invoke-Guarded 'powershell.exe' (ConvertTo-ArgString @('-NoProfile', '-Command', $code)) $env:TEMP 300 60
   Start-Sleep -Seconds 2
   $left = @(Get-Tree $r.Pid | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
-  Write-Host "  guard: killed=$($r.Killed) reason='$($r.Reason)' peak=$($r.PeakMB) MB after $($r.Seconds) s, survivors=$($left.Count)"
-  if ($r.Killed -and $left.Count -eq 0 -and $r.Reason -like 'memory*') { Write-Host 'GUARD SELFTEST PASSED'; exit 0 }
+  Expect "memory limit kills the whole tree (peak $($r.PeakMB) MB, $($r.Seconds) s)" ($r.Killed -and $r.Reason -like 'memory*' -and $left.Count -eq 0) "survivors=$($left.Count)"
+  # 2. the root exits early and leaves a child running -> the child must be killed.
+  $code = '$c = Start-Process powershell -ArgumentList ''-NoProfile'',''-Command'',''Start-Sleep 120'' -PassThru; Write-Output $c.Id; Start-Sleep -Milliseconds 700'
+  $r = Invoke-Guarded 'powershell.exe' (ConvertTo-ArgString @('-NoProfile', '-Command', $code)) $env:TEMP 3000 60 '' 100
+  $childId = [int](($r.Output -split '\s+' | Where-Object { $_ -match '^\d+$' } | Select-Object -First 1))
+  Start-Sleep -Seconds 1
+  Expect 'a child that outlives the root is killed' ($childId -gt 0 -and -not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) "child=$childId"
+  if ($childId -gt 0) { Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue }
+  # 3. argument quoting: embedded quote, trailing backslash, spaces.
+  $t = Join-Path $env:TEMP ('crew-guard-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  New-Item -ItemType Directory -Path "$t\dir with space" -Force | Out-Null
+  $dump = "$t\dump.ps1"
+  Set-Content -LiteralPath $dump -Value '$args | ForEach-Object { "[" + $_ + "]" }'
+  $items = @('plain', 'a "quoted" word', 'trail\', 'C:\x y\', 'two  spaces')
+  $r = Invoke-Guarded 'powershell.exe' (ConvertTo-ArgString (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $dump) + $items)) $t 3000 60
+  $got = @($r.Output -split "`r?`n" | Where-Object { $_ })
+  Expect 'ConvertTo-ArgString keeps embedded quotes, trailing backslashes and spaces' (($got -join '|') -eq (($items | ForEach-Object { "[$_]" }) -join '|')) ($got -join '|')
+  # 4. the .cmd launch form with a space in the path: all arguments arrive intact.
+  Set-Content -LiteralPath "$t\dir with space\echo args.cmd" -Value '@echo off', 'echo ARGS:%1^|%2^|%3' -Encoding Ascii
+  $r = Invoke-Guarded $env:ComSpec (ConvertTo-CmdArgString "$t\dir with space\echo args.cmd" @('-p', 'two words', '--x=a,b')) $t 3000 60
+  Expect '.cmd launch with a space in the path passes the arguments' ($r.Output -match [regex]::Escape('ARGS:"-p"|"two words"|"--x=a,b"')) $r.Output.Trim()
+  Remove-Item -LiteralPath $t -Recurse -Force -ErrorAction SilentlyContinue
+  if ($bad -eq 0) { Write-Host 'GUARD SELFTEST PASSED'; exit 0 }
   Write-Host 'GUARD SELFTEST FAILED' -ForegroundColor Red; exit 1
 }
 
@@ -176,23 +229,29 @@ Run the crew-bootstrap skill for this project now. This is a non-interactive run
 3. Risky areas: none.
 4. Languages: English for chat and repository.
 5. I approve and merge; nothing goes straight to the default branch.
-Roster: the minimal core only. Do the whole bootstrap yourself, including PROJECT.md: subagents are disabled in this run. Writes to .claude/team are expected to be refused in this headless run: follow the skill's fallback (drafts in the folder crew-bootstrap-drafts/ in the project root) and end your reply with the line `DRAFTS: <absolute folder path>`. Reply in at most 8 lines.
+Roster: the minimal core only. The agent-crew install folder for this run (`$CREW) is $crewCopy . Do the whole bootstrap yourself, including PROJECT.md: subagents are disabled in this run. Writes to .claude/team are expected to be refused in this headless run: follow the skill's fallback (drafts in the folder crew-bootstrap-drafts/ in the project root) and end your reply with the line `DRAFTS: <absolute folder path>`. Reply in at most 8 lines.
 "@
-  $argList = @('-p', '--agent', 'lead', '--permission-mode', 'acceptEdits', '--max-budget-usd', "$MaxBudgetUsd", '--output-format', 'json', '--add-dir', $Crew, '--disallowedTools=Agent,Task,SendMessage')
+  # The headless run may edit what --add-dir grants, so it gets a COPY of the installed agent-crew,
+  # never the real one. The prompt tells it that copy is $CREW.
+  $crewCopy = $proj + '-crew'
+  Copy-Item -LiteralPath $Crew -Destination $crewCopy -Recurse
+  $argList = @('-p', '--agent', 'lead', '--permission-mode', 'acceptEdits', '--max-budget-usd', "$MaxBudgetUsd", '--output-format', 'json', '--add-dir', $crewCopy, '--disallowedTools=Agent,Task,SendMessage')
   if ($Model) { $argList += @('--model', $Model) }
-  # A nested run must not think it is inside the caller's session.
+  # Only the variables that make claude think it runs INSIDE the caller's session (its identity, message
+  # socket and bridge) are removed for the child; everything else (PATH, proxies, CLAUDE_CODE_EXECPATH...) stays.
+  $nested = 'CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED',
+    'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_BRIDGE_SESSION_ID'
   $saved = @{}
-  foreach ($e in @(Get-ChildItem Env: | Where-Object { $_.Name -eq 'CLAUDECODE' -or $_.Name -like 'CLAUDE_CODE_*' -or $_.Name -eq 'CLAUDE_PID' })) {
-    $saved[$e.Name] = $e.Value
-    Remove-Item "Env:$($e.Name)"
+  foreach ($name in $nested) {
+    $v = [Environment]::GetEnvironmentVariable($name)
+    if ($null -ne $v) { $saved[$name] = $v; Remove-Item "Env:$name" }
   }
   Write-Host "Running claude headless in $proj (cap `$$MaxBudgetUsd) ..."
   # The prompt goes through stdin: a newline in a cmd.exe command line cuts it off.
-  # --add-dir lets the headless run read the installed templates (outside the project).
-  # claude is an npm shim: prefer a real exe, else the .cmd through cmd.exe (taskkill /T covers the chain).
+  # claude is an npm shim (claude.cmd) or a real exe; the guard kills the whole process tree either way.
   $cl = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($cl.Source -match '\.exe$') { $file = $cl.Source; $fargs = $argList }
-  else { $file = $env:ComSpec; $fargs = @('/c', $cl.Source) + $argList }
+  if ($cl.Source -match '\.exe$') { $file = $cl.Source; $fargs = ConvertTo-ArgString $argList }
+  else { $file = $env:ComSpec; $fargs = ConvertTo-CmdArgString $cl.Source $argList }
   $out = ''
   try { $run = Invoke-Guarded $file $fargs $proj $MaxMemoryMB $TimeoutSec $prompt }
   finally { foreach ($k in $saved.Keys) { Set-Item "Env:$k" $saved[$k] } }
@@ -217,7 +276,7 @@ Roster: the minimal core only. Do the whole bootstrap yourself, including PROJEC
   if ($said -match 'DRAFTS:\s*`?([^\s`*]+)') { $draftDir = $Matches[1].Trim() }
   $draftOk = [bool]($draftDir -and (Test-Path -LiteralPath $draftDir -PathType Container))
   Check 'reply has a DRAFTS: <folder> line naming an existing folder' $draftOk $draftDir
-  if ($draftOk) { Check 'drafts are in <project>/crew-bootstrap-drafts' ((Resolve-Path -LiteralPath $draftDir).Path.TrimEnd('') -ieq (Join-Path (Resolve-Path -LiteralPath $proj).Path 'crew-bootstrap-drafts')) $draftDir }
+  if ($draftOk) { Check 'drafts are in <project>/crew-bootstrap-drafts' ((Resolve-Path -LiteralPath $draftDir).Path.TrimEnd([char[]]'\/') -ieq (Join-Path (Resolve-Path -LiteralPath $proj).Path 'crew-bootstrap-drafts')) $draftDir }
   $copy = $proj + '-copy'
   $team = Join-Path $copy '.claude\team'
   if ($draftOk) {
@@ -247,6 +306,7 @@ Roster: the minimal core only. Do the whole bootstrap yourself, including PROJEC
   else {
     Remove-Item -LiteralPath $proj -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath ($proj + '-copy') -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath ($proj + '-crew') -Recurse -Force -ErrorAction SilentlyContinue
   }
 }
 $failed = @($results | Where-Object { -not $_ }).Count
