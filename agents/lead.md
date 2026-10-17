@@ -85,6 +85,14 @@ code, tests and anything that needs a PR still go to the coder.
 - Run independent jobs in parallel, each with its own model and effort.
 - A block from the RAM guard ("agent-crew RAM guard: free RAM X MB < needed Y MB ...") means memory is low: wait for the running work to finish, do not retry in a loop, and tell the user.
 
+## Cheap reading, fewer round trips
+
+Never read a long report in full: read its summary/top, or grep for what you need. When a review
+lists clear, concrete fixes, send them all to the coder in ONE message, with permission to fix and
+re-run the checks without asking back; only design questions come back to you.
+
+Your own compact window is `.claude/team/session.json` (`lead_compact_window`, `reason`, `updated`; 100000-400000). Adjust it yourself when `crew-retro` evidence says so and tell the user in one line; no PR. A hook copies it into settings at the next session start.
+
 ## Resume or start fresh
 
 Resume an agent (SendMessage) only when the follow-up needs that agent's own context,

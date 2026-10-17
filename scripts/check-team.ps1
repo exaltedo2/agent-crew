@@ -14,6 +14,9 @@
   unknown names are never rejected.
   Warns when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1, CLAUDE_CODE_EFFORT_LEVEL, CLAUDE_CODE_SUBAGENT_MODEL or
   CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 is set in the environment or the "env" block of the user/project settings.
+  Validates .claude/team/session.json (the lead's compact window), prints INFO with the effective value and the
+  source that wins, and warns when the settings differ from it, when CLAUDE_CODE_AUTO_COMPACT_WINDOW or a user
+  setting overrides it, or when `idleCompaction` is false.
 
 .PARAMETER Project     Project folder (default: current folder).
 .PARAMETER ClaudeHome  User-level Claude folder (default: $HOME\.claude).
@@ -212,7 +215,54 @@ foreach ($name in $overrides.Keys) {
   if ($sources.Count -gt 0) { $warnings.Add("$name is set (in $($sources -join ', ')): $($overrides[$name].Why).") }
 }
 
+# Lead compact window: .claude/team/session.json (owned by the lead) is copied by the SessionStart hook into the project
+# .claude/settings.local.json. Documented precedence: env CLAUDE_CODE_AUTO_COMPACT_WINDOW > --autocompact flag (not
+# visible from here) > modelSettings.<model>.autoCompactWindow > top-level autoCompactWindow (local > project > user). Read only.
+$cwInfo = $null
+$cwSession = Get-CompactSession $team
+if ($cwSession.Exists) {
+  if ($cwSession.Problem) {
+    $warnings.Add("session.json is unusable ($($cwSession.Problem)): the hook leaves autoCompactWindow untouched. Expected {`"lead_compact_window`": 200000, `"reason`": `"...`", `"updated`": `"...`"} with a whole number of tokens.")
+  } else {
+    if ($cwSession.Clamped) { $warnings.Add("session.json lead_compact_window $($cwSession.Requested) is outside $($script:CompactMin)-$($script:CompactMax); the hook uses $($cwSession.Value).") }
+    $cwLocalFile = Join-Path $Project '.claude/settings.local.json'
+    $cwProjFile = Join-Path $Project '.claude/settings.json'
+    $cwLocal = Read-JsonFile $cwLocalFile
+    $cwProj = Read-JsonFile $cwProjFile
+    $localVal = if ($cwLocal -and $cwLocal.PSObject.Properties['autoCompactWindow']) { [string]$cwLocal.autoCompactWindow } else { '' }
+    $projVal = if ($cwProj -and $cwProj.PSObject.Properties['autoCompactWindow']) { [string]$cwProj.autoCompactWindow } else { '' }
+    $overrides2 = @(Get-CompactUserOverrides @($ClaudeHome))
+    $winner = $null; $winnerVal = $null
+    if ($overrides2.Count -gt 0) {
+      $winner = $overrides2[0]
+      $warnings.Add("the user's own compact window wins over session.json ($($cwSession.Value)): $($overrides2 -join '; '). The hook leaves settings.local.json untouched.")
+    } elseif ($localVal -ne '') { $winner = "$cwLocalFile"; $winnerVal = $localVal }
+    elseif ($projVal -ne '') { $winner = "$cwProjFile"; $winnerVal = $projVal }
+    if ($overrides2.Count -eq 0) {
+      if ($localVal -ne '' -and $localVal -ne [string]$cwSession.Value) {
+        $warnings.Add("session.json says $($cwSession.Value) but autoCompactWindow in $cwLocalFile is $localVal; the hook syncs it at the next session start.")
+      }
+      if ($localVal -eq '' -and $projVal -ne '' -and $projVal -ne [string]$cwSession.Value) {
+        $warnings.Add("session.json says $($cwSession.Value) but autoCompactWindow in $cwProjFile is $projVal; the hook will write $($cwSession.Value) to settings.local.json, which wins over it.")
+      }
+      if ($localVal -ne '' -and $projVal -ne '' -and $projVal -ne $localVal) {
+        $warnings.Add("autoCompactWindow differs between $cwProjFile ($projVal) and $cwLocalFile ($localVal): the local file wins.")
+      }
+    }
+    if ($winner -and $null -ne $winnerVal) { $cwInfo = "lead compact window: $winnerVal in effect from $winner (session.json: $($cwSession.Value))" }
+    elseif ($winner) { $cwInfo = "lead compact window: set by $winner (session.json: $($cwSession.Value))" }
+    else { $cwInfo = "lead compact window: session.json says $($cwSession.Value), not yet in settings.local.json (the hook writes it at the next session start)" }
+  }
+}
+foreach ($f in @((Join-Path $ClaudeHome 'settings.json'), (Join-Path $Project '.claude/settings.json'), (Join-Path $Project '.claude/settings.local.json'))) {
+  $j = Read-JsonFile $f
+  if ($j -and $j.PSObject.Properties['idleCompaction'] -and $j.idleCompaction -eq $false) {
+    $warnings.Add("idleCompaction is false in ${f}: an idle session is not compacted before the prompt cache expires.")
+  }
+}
+
 foreach ($w in $warnings) { Write-Output "WARN: $w" }
+if ($cwInfo) { Write-Output "INFO: $cwInfo" }
 if ($problems.Count -eq 0) {
   Write-Output "OK: .claude/team passes ($($active.Count) active agents)."
   exit 0

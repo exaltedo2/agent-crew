@@ -26,6 +26,15 @@ pays per token. A warning "unknown model family" means a model the price file do
 tell the user to add its family to `~/.claude/team/prices.local.json` (README, Models). Remember: `subagent_tokens` in notifications is a
 context size, not spend; only the ledger is spend.
 
+Also read the lead's own rows (main session, not subagents) in the ledger output or the session
+transcript usage: the typical context size per turn and how often it was compacted. Report both in
+one line. If the evidence says the window is wrong (contexts stay far below it and never compact:
+lower it; compacted several times in a short span and lost state: raise it; stay within
+100000-400000), edit `.claude/team/session.json` yourself (`lead_compact_window`, `reason`, `updated`)
+and tell the user in one line. No pull request and no approval: the session-start hook copies the
+value into `.claude/settings.local.json` at the next session start. If the user set their own value
+(env var, `/autocompact`, user settings) the hook leaves it alone; `check-team` says which wins.
+
 ## 2. Update the evidence
 
 - `routing.md` "Evidence": add one line per useful measurement or finding (what was tried,

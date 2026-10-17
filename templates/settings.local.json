@@ -1,5 +1,4 @@
 {
   "agent": "lead",
-  "autoCompactWindow": 350000,
   "idleCompaction": true
 }

@@ -64,6 +64,10 @@ as `trial`.
 ## 4. Write `.claude/team/`
 
 The lead writes the files that are its own (a hook blocks the file-edit tools elsewhere):
+- `session.json` from `$CREW/templates/session.json`: the lead's own compact window. Pick `lead_compact_window`
+  (tokens) from the project and give a one-line `reason`; these are guesses: small repo and short tasks
+  150000, typical 200000, large repo with long design discussions 250000; never above 400000 (clamped
+  to 100000-400000). The lead changes it later itself (`crew-retro`). Mention it is a guess.
 - `routing.md` from `$CREW/templates/routing.md`; delete table rows for agents that are not in the roster.
 - `roster.md` from the template: only the agents of the roster, status `trial` for catalog roles.
 - `state.md` from the template, with the Goal filled and `updated:` set to the current time.
@@ -91,7 +95,8 @@ paths to put them in place on a branch with a pull request (`PROJECT.md` is comm
   step 1, with notes), Hazards, Conventions, Decision policy, Lead may run; set
   `agent_crew_version` to the content of `$CREW/VERSION`; set `direct_to_main` only to what the
   user named in question 5; leave `lead_writable: []` unless the user names a safe extra glob.
-- `.claude/settings.local.json` from `$CREW/templates/settings.local.json`: if the file exists,
+- `.claude/settings.local.json` from `$CREW/templates/settings.local.json` (no compact window in it: the
+  session-start hook writes `autoCompactWindow` there from `session.json`): if the file exists,
   add only the missing keys. The values are guesses; tell the user they can change them.
 - `.gitignore`: add these lines if missing (create the file if needed):
 
@@ -101,6 +106,7 @@ paths to put them in place on a branch with a pull request (`PROJECT.md` is comm
 .claude/team/snapshots/
 .claude/team/state.md
 .claude/team/compact_log.md
+.claude/team/session.json
 .claude/team/.last-retro
 ```
 

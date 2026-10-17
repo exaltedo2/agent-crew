@@ -526,3 +526,118 @@ function Get-RamHookIfRules {
   }
   return [pscustomobject]@{ All = $false; Globs = @($globs) }
 }
+
+# ---------- lead compact window ----------
+# The lead owns .claude/team/session.json {"lead_compact_window": N, "reason": "...", "updated": "..."}.
+# The SessionStart hook copies N (clamped) into the project's .claude/settings.local.json `autoCompactWindow`, the only
+# key it ever touches, unless the user set their own value (environment, user settings).
+$script:CompactMin = 100000
+$script:CompactMax = 400000
+
+function Read-JsonFile {
+  # Parsed JSON object, or $null when the file is missing or not valid JSON.
+  param([string]$Path)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+  try { return (Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop) } catch { return $null }
+}
+
+function Get-UserClaudeHomes {
+  # The user's Claude config folders as they exist on disk (not lower-cased, unlike Get-UserClaudeDirs).
+  $l = New-Object System.Collections.Generic.List[string]
+  if ($HOME) { $l.Add((Join-Path $HOME '.claude')) }
+  if ($env:CLAUDE_CONFIG_DIR) { $l.Add($env:CLAUDE_CONFIG_DIR) }
+  return @($l)
+}
+
+function Get-CompactSession {
+  # Reads <team>/session.json. Exists=$false when there is no file (feature unused). Problem is set when the file or
+  # its value is unusable; otherwise Value is the requested window clamped to [CompactMin, CompactMax].
+  param([string]$Team)
+  $path = Join-Path $Team 'session.json'
+  $r = @{ Path = $path; Exists = $false; Value = $null; Requested = $null; Clamped = $false; Reason = ''; Problem = '' }
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $r }
+  $r.Exists = $true
+  $j = Read-JsonFile $path
+  if ($null -eq $j) { $r.Problem = 'not valid JSON'; return $r }
+  $prop = $j.PSObject.Properties['lead_compact_window']
+  if (-not $prop -or $null -eq $prop.Value) { $r.Problem = 'no lead_compact_window'; return $r }
+  $v = $prop.Value
+  if ($v -is [string] -or $v -is [bool] -or -not ($v -is [ValueType])) { $r.Problem = 'lead_compact_window must be a number'; return $r }
+  $d = [double]$v
+  if ([double]::IsNaN($d) -or [double]::IsInfinity($d) -or $d -ne [Math]::Floor($d)) { $r.Problem = 'lead_compact_window must be a whole number of tokens'; return $r }
+  $r.Requested = [long]$d
+  $clamped = [Math]::Min([Math]::Max($r.Requested, $script:CompactMin), $script:CompactMax)
+  $r.Clamped = ($clamped -ne $r.Requested)
+  $r.Value = [long]$clamped
+  if ($j.PSObject.Properties['reason'] -and $j.reason) { $r.Reason = ([string]$j.reason).Trim() }
+  return $r
+}
+
+function Get-CompactUserOverrides {
+  # Settings the user made themselves that the hook must not fight (strings, one per source). The documented order
+  # is env > --autocompact flag (invisible here) > modelSettings.<model> > top-level; a top-level user key is
+  # reported too so the hook never overwrites what the user chose.
+  param([string[]]$ClaudeHomes)
+  $out = New-Object System.Collections.Generic.List[string]
+  $e = [Environment]::GetEnvironmentVariable('CLAUDE_CODE_AUTO_COMPACT_WINDOW')
+  if (-not [string]::IsNullOrWhiteSpace($e)) { $out.Add("the environment variable CLAUDE_CODE_AUTO_COMPACT_WINDOW ($($e.Trim()))") }
+  foreach ($h in @($ClaudeHomes | Where-Object { $_ } | Select-Object -Unique)) {
+    $f = Join-Path $h 'settings.json'
+    $j = Read-JsonFile $f
+    if (-not $j) { continue }
+    if ($j.PSObject.Properties['modelSettings'] -and $j.modelSettings) {
+      foreach ($m in $j.modelSettings.PSObject.Properties) {
+        if ($m.Value -and $m.Value.PSObject.Properties['autoCompactWindow'] -and $null -ne $m.Value.autoCompactWindow) {
+          $out.Add("modelSettings.$($m.Name).autoCompactWindow ($($m.Value.autoCompactWindow)) in $f")
+        }
+      }
+    }
+    if ($j.PSObject.Properties['autoCompactWindow'] -and $null -ne $j.autoCompactWindow) { $out.Add("autoCompactWindow ($($j.autoCompactWindow)) in $f") }
+  }
+  return @($out)
+}
+
+function Set-ProjectCompactWindow {
+  # Writes ONLY the autoCompactWindow key of <project>/.claude/settings.local.json (created if missing, every other key
+  # kept, atomic replace). Returns 'unchanged', 'created', 'changed' or 'unreadable' (not valid JSON: left untouched).
+  param([string]$Project, [long]$Value)
+  $path = Join-Path $Project '.claude/settings.local.json'
+  $existed = Test-Path -LiteralPath $path -PathType Leaf
+  if ($existed) {
+    $j = Read-JsonFile $path
+    if ($null -eq $j -or $j -is [array] -or $j -is [string] -or $j -is [ValueType]) { return 'unreadable' }
+    $prop = $j.PSObject.Properties['autoCompactWindow']
+    if ($prop -and $null -ne $prop.Value -and "$($prop.Value)" -eq "$Value") { return 'unchanged' }
+    if ($prop) { $j.autoCompactWindow = $Value } else { $j | Add-Member -NotePropertyName autoCompactWindow -NotePropertyValue $Value }
+  } else {
+    $j = [pscustomobject]@{ autoCompactWindow = $Value }
+    $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path)
+  }
+  $text = ($j | ConvertTo-Json -Depth 32) + "`n"
+  $tmp = $path + '.agent-crew.tmp'
+  [System.IO.File]::WriteAllText($tmp, $text, (New-Object System.Text.UTF8Encoding($false)))
+  if ($existed) {
+    $bak = $path + '.agent-crew.bak'
+    [System.IO.File]::Replace($tmp, $path, $bak)
+    Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue
+  } else { [System.IO.File]::Move($tmp, $path) }
+  if ($existed) { return 'changed' } else { return 'created' }
+}
+
+function Invoke-CompactWindowSync {
+  # SessionStart: applies session.json to the project settings. Returns the lines to print (possibly none).
+  param([string]$Team, [string]$Project, [string[]]$ClaudeHomes)
+  $s = Get-CompactSession $Team
+  if (-not $s.Exists) { return @() }
+  if ($s.Problem) { return @("agent-crew: .claude/team/session.json is unusable ($($s.Problem)); autoCompactWindow in .claude/settings.local.json is left untouched. Fix the file.") }
+  $over = @(Get-CompactUserOverrides $ClaudeHomes)
+  if ($over.Count -gt 0) {
+    return @("agent-crew: session.json asks for a lead compact window of $($s.Value) but you set your own value ($($over -join '; ')). Your value wins; settings.local.json is left untouched.")
+  }
+  $res = Set-ProjectCompactWindow $Project $s.Value
+  if ($res -eq 'unreadable') { return @('agent-crew: .claude/settings.local.json is not valid JSON; autoCompactWindow was not updated.') }
+  if ($res -eq 'unchanged') { return @() }
+  $why = ''; if ($s.Reason) { $why = " Reason: $($s.Reason)." }
+  $clamp = ''; if ($s.Clamped) { $clamp = " (requested $($s.Requested), clamped to $($script:CompactMin)-$($script:CompactMax))" }
+  return @("agent-crew: lead compact window set to $($s.Value)$clamp in .claude/settings.local.json from .claude/team/session.json.$why It takes effect from the next session start (whether Claude Code picks up a settings change inside a running session is not verified).")
+}
