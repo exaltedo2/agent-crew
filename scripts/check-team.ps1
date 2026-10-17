@@ -164,6 +164,24 @@ foreach ($w in $ramShipped) { $warnings.Add($w) }
 foreach ($w in $ramUser) { $warnings.Add($w) }
 foreach ($w in $ramProject) { $problems.Add($w) }
 
+# USER.md `lead_writable` (optional): warn on entries the guard will never honour.
+$userFm = Get-FrontMatter (Join-Path (Join-Path $ClaudeHome 'team') 'USER.md')
+foreach ($g in @($userFm['lead_writable'])) {
+  if ([string]::IsNullOrWhiteSpace($g)) { continue }
+  $why = Get-UserLeadGlobProblem $g
+  if ($why) { $warnings.Add("USER.md lead_writable '$g' is ignored by the guard: $why"); continue }
+  $d = ($g.Trim() -split '[*?]')[0]
+  if ($d.StartsWith('~')) { $d = (ConvertTo-SlashPath $HOME).TrimEnd('/') + $d.Substring(1) }
+  while ($d) {
+    if ([System.IO.Directory]::Exists((Join-Path $d '.git')) -or [System.IO.File]::Exists((Join-Path $d '.git'))) {
+      $warnings.Add("USER.md lead_writable '$g' is inside a git repository: the guard never allows it (code changes go through a PR)"); break
+    }
+    $parent = Split-Path -Parent $d
+    if ([string]::IsNullOrEmpty($parent) -or $parent -eq $d) { break }
+    $d = $parent
+  }
+}
+
 foreach ($w in $warnings) { Write-Output "WARN: $w" }
 if ($problems.Count -eq 0) {
   Write-Output "OK: .claude/team passes ($($active.Count) active agents)."

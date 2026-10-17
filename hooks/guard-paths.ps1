@@ -3,8 +3,9 @@
   PreToolUse hook for Edit|Write|MultiEdit|NotebookEdit. Keeps the lead and the report-only
   agents inside the places they may write. Block = exit code 2 with the reason on stderr.
 
-  - lead: .claude/team/** (also ~/.claude/team/**) and the PROJECT.md `lead_writable` globs,
-    but NEVER PROJECT.md itself, .claude/settings*.json or hook scripts, even if a glob
+  - lead: .claude/team/** (also ~/.claude/team/reports/**, never USER.md or ram-guard.json there) and the PROJECT.md `lead_writable` globs,
+    plus files outside the project matching the optional USER.md `lead_writable` globs (never inside a git
+    repository, settings*.json, hooks, agents), but NEVER PROJECT.md itself, .claude/settings*.json or hook scripts, even if a glob
     lists them: those changes go through the coder.
   - thinker, architect, reviewer (and ui-reviewer, security-reviewer, perf-profiler, plus
     PROJECT.md `report_only_agents`): only .claude/team/reports/**.
@@ -72,8 +73,8 @@ try {
     exit 2
   }
 
-  $realRoot = Resolve-RealPath $root
-  $realFile = Resolve-RealPath $abs
+  $realRoot = Resolve-RealPath (Get-LongPath $root)
+  $realFile = Resolve-RealPath (Get-LongPath $abs)
   $rel = Get-RelativeToRoot -Root $realRoot -File $realFile -Cwd $cwd
 
   if ($isReportOnly) {
@@ -93,11 +94,19 @@ try {
     if ($rel -match '(?i)^\.claude/team/.+') { exit 0 }
     if (Test-GlobMatch -RelPath $rel -Globs @($project['lead_writable'])) { exit 0 }
   } else {
-    # Outside the project: only the user-wide team folder (USER.md) is allowed.
-    $full = ConvertTo-SlashPath $realFile
-    foreach ($userDir in (Get-UserClaudeDirs)) {
-      $userTeam = ConvertTo-SlashPath (Resolve-RealPath (Join-Path $userDir 'team'))
-      if ($full.StartsWith($userTeam.TrimEnd('/') + '/', [System.StringComparison]::OrdinalIgnoreCase)) { exit 0 }
+    # Outside the project: ~/.claude/team/reports/** and the USER.md lead_writable globs. Never the rest of
+    # the user team folder (USER.md and ram-guard.json define the lead's own rights and the RAM guard).
+    # Fail closed: any problem in this branch denies the write.
+    try {
+      $full = ConvertTo-SlashPath $realFile
+      foreach ($userDir in (Get-UserClaudeDirs)) {
+        $userReports = ConvertTo-SlashPath (Resolve-RealPath (Get-LongPath (Join-Path (Join-Path $userDir 'team') 'reports') -Strict))
+        if ($full.StartsWith($userReports.TrimEnd('/') + '/', [System.StringComparison]::OrdinalIgnoreCase)) { exit 0 }
+      }
+      if (Test-UserLeadWritable $realFile) { exit 0 }
+    } catch {
+      [Console]::Error.WriteLine("agent-crew: the lead may not write $file (checking the user lead_writable list failed: $($_.Exception.Message))")
+      exit 2
     }
   }
   [Console]::Error.WriteLine("agent-crew: the lead may edit only .claude/team/** and the PROJECT.md lead_writable globs (tried: $file). Delegate this change to the coder.")

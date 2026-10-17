@@ -1,3 +1,10 @@
+---
+# Optional: personal files outside any project that the lead may edit itself (absolute or ~-relative
+# globs). Never honoured: settings*.json, hooks, agent files, PROJECT.md, anything inside a git repo.
+# lead_writable:
+#   - ~/.claude/notes/**
+lead_writable: []
+---
 # User preferences (every project, every agent team)
 
 Copied once to `~/.claude/team/USER.md` by the agent-crew installer; never overwritten

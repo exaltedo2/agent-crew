@@ -4,6 +4,16 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## 0.3.1 - 2026-10-17
+
+- The lead may do small personal edits itself: optional `lead_writable` list (absolute or `~`-relative globs) in
+  the front matter of `~/.claude/team/USER.md`, honoured by `guard-paths` for files outside the project. Never
+  allowed even if listed: settings*.json, hooks, agent files, PROJECT.md, anything inside a git repository (also bare),
+  anything in `~/.claude` except `notes/**`, shell profiles, `.ssh`, Startup, `.gitconfig`. Relative, drive-root and
+  home-folder globs are ignored. The lead may now write only `~/.claude/team/reports/**` in the user team folder (not
+  USER.md or ram-guard.json). 8.3 short names are expanded; errors in the user-list check deny.
+  `check-team` warns about such entries. `lead.md` "When NOT to delegate" says the lead does these itself.
+
 ## 0.3.0 - 2026-10-17
 
 - New hook `ram-guard` (PreToolUse): blocks starting new work when free physical memory is below the
