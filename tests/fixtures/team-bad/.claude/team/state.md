@@ -1,0 +1,87 @@
+<!-- Not a log: delete finished items. Cap: 50 lines. The lead updates this file when an agent
+is launched, when one returns, when a decision is made and when a task is finished.
+After a compaction this file is authoritative for open tasks and running agents. -->
+
+# Session state
+
+## Goal
+
+<!-- one or two lines -->
+
+## Open tasks
+
+<!-- - [ ] task, owner agent, branch/PR -->
+
+## Running agents
+
+<!-- | agent id | task | report path (absolute) | -->
+
+## Pending decisions
+
+<!-- Decisions waiting for the user, each with the current default. -->
+
+## Index
+
+<!-- topic -> file, one line each. Knowledge lives in its own file; this is only a pointer. -->
+
+updated: never
+- filler line 1
+- filler line 2
+- filler line 3
+- filler line 4
+- filler line 5
+- filler line 6
+- filler line 7
+- filler line 8
+- filler line 9
+- filler line 10
+- filler line 11
+- filler line 12
+- filler line 13
+- filler line 14
+- filler line 15
+- filler line 16
+- filler line 17
+- filler line 18
+- filler line 19
+- filler line 20
+- filler line 21
+- filler line 22
+- filler line 23
+- filler line 24
+- filler line 25
+- filler line 26
+- filler line 27
+- filler line 28
+- filler line 29
+- filler line 30
+- filler line 31
+- filler line 32
+- filler line 33
+- filler line 34
+- filler line 35
+- filler line 36
+- filler line 37
+- filler line 38
+- filler line 39
+- filler line 40
+- filler line 41
+- filler line 42
+- filler line 43
+- filler line 44
+- filler line 45
+- filler line 46
+- filler line 47
+- filler line 48
+- filler line 49
+- filler line 50
+- filler line 51
+- filler line 52
+- filler line 53
+- filler line 54
+- filler line 55
+- filler line 56
+- filler line 57
+- filler line 58
+- filler line 59
+- filler line 60

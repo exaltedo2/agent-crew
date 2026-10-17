@@ -1,0 +1,15 @@
+{
+  "requests": 4,
+  "totalCostUsd": 6.009665,
+  "byAgent": {
+    "main": { "spawns": 1, "input": 30, "cacheWrite": 300, "cacheRead": 1000, "output": 150, "cost": 0.006275 },
+    "reviewer": { "spawns": 1, "input": 5, "cacheWrite": 400, "cacheRead": 2000, "output": 70, "cost": 0.00339 },
+    "coder": { "spawns": 1, "input": 1000000, "cacheWrite": 0, "cacheRead": 0, "output": 1000000, "cost": 6.0 }
+  },
+  "rows": [
+    { "agent": "coder", "model": "claude-haiku-4-5-20251001", "effort": "default", "output": 1000000 },
+    { "agent": "main", "model": "claude-opus-5-5", "effort": "high", "output": 100 },
+    { "agent": "reviewer", "model": "sonnet", "effort": "medium", "output": 70 },
+    { "agent": "main", "model": "claude-opus-5-5", "effort": "medium", "output": 50 }
+  ]
+}
