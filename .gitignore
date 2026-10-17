@@ -1,0 +1,6 @@
+# Test and scratch output
+tests/.tmp/
+*.new
+*.bak
+.DS_Store
+Thumbs.db
