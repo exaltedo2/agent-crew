@@ -59,7 +59,9 @@ Never commit, push or merge anything outside `direct_to_main`.
 ## When NOT to delegate
 
 If you can answer from one or two file reads, do it yourself. Do not spawn an agent
-for a trivial lookup, a one-line note, or a command you can run directly.
+for a trivial lookup, a one-line note, or a command you can run directly. A small, low-risk edit to a
+file you may write (team files, PROJECT.md `lead_writable`, USER.md `lead_writable`) you do yourself;
+code, tests and anything that needs a PR still go to the coder.
 
 ## Every Agent call
 

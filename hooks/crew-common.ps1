@@ -45,6 +45,138 @@ function Get-UserClaudeDirs {
   return @($dirs | ForEach-Object { $_.TrimEnd([char]92, [char]47).ToLowerInvariant() })
 }
 
+function Get-LongPath {
+  # Expands 8.3 short names (PROGRA~1) so a short alias cannot dodge a path comparison. For a file that
+  # does not exist yet the existing parent is expanded. Short names always contain '~', so paths without
+  # one are returned at once (no cost). With -Strict a failure throws instead of returning the input.
+  param([string]$Path, [switch]$Strict)
+  if ($Path.IndexOf('~') -lt 0) { return $Path }
+  try {
+    if (-not ('Crew.Native' -as [type])) {
+      Add-Type -Namespace Crew -Name Native -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] public static extern uint GetLongPathName(string s, System.Text.StringBuilder b, uint n);'
+    }
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $existing = $full
+    $rest = @()
+    while ($existing -and -not (Test-Path -LiteralPath $existing)) {
+      $rest = @(Split-Path -Leaf $existing) + $rest
+      $existing = Split-Path -Parent $existing
+    }
+    if (-not $existing) { return $full }
+    $sb = New-Object System.Text.StringBuilder 32768
+    if ([Crew.Native]::GetLongPathName($existing, $sb, 32768) -gt 0) { $existing = $sb.ToString() }
+    elseif ($Strict) { throw "GetLongPathName failed for $existing" }
+    foreach ($r in $rest) { $existing = Join-Path $existing $r }
+    return $existing
+  } catch {
+    if ($Strict) { throw }
+    return $Path
+  }
+}
+
+function Get-UserClaudeSlashDirs {
+  # Every user-wide Claude folder as a slash path (long names, symlinks resolved).
+  $out = New-Object System.Collections.Generic.List[string]
+  $all = @(Get-UserClaudeDirs)
+  if ($HOME) { $all += (Join-Path $HOME '.claude') }
+  foreach ($d in $all) {
+    $x = (ConvertTo-SlashPath (Resolve-RealPath (Get-LongPath $d))).TrimEnd('/')
+    if (-not $out.Contains($x)) { $out.Add($x) }
+  }
+  return @($out)
+}
+
+function Test-UserLeadDeniedPath {
+  # String-only part of the rules for what a user lead_writable glob can never grant (slash path, no
+  # filesystem access): settings, hooks, agents, PROJECT.md, ~/.claude beyond notes/, code-execution spots.
+  param([string]$Path)
+  $p = (ConvertTo-SlashPath $Path).TrimEnd('/')
+  if ($p -match '(?i)(^|/)settings[^/]*\.json$') { return $true }
+  if ($p -match '(?i)(^|/)(hooks|agents)(/|$)') { return $true }
+  if ($p -match '(?i)(^|/)PROJECT\.md$') { return $true }
+  if ($p -match '(?i)(^|/)\.claude\.json$') { return $true }
+  # Shell profiles, ssh, startup folders, git config: files that run code or hold keys.
+  if ($p -match '(?i)(^|/)(\.ssh|WindowsPowerShell|PowerShell|startup)(/|$)') { return $true }
+  if ($p -match '(?i)(^|/)\.config/(powershell|git)(/|$)') { return $true }
+  if ($p -match '(?i)(^|/)\.(bashrc|bash_profile|bash_login|bash_logout|zshrc|zshenv|zprofile|zlogin|profile|gitconfig|inputrc)$') { return $true }
+  if ($p -match '(?i)(^|/)[^/]*profile\.ps1$') { return $true }
+  foreach ($d in (Get-UserClaudeSlashDirs)) {
+    $inside = $p.Equals($d, [System.StringComparison]::OrdinalIgnoreCase) -or $p.StartsWith($d + '/', [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $inside) { continue }
+    $notes = $d + '/notes'
+    if ($p.Equals($notes, [System.StringComparison]::OrdinalIgnoreCase) -or $p.StartsWith($notes + '/', [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+    return $true
+  }
+  return $false
+}
+
+function Expand-UserGlob([string]$Glob) {
+  $t = (ConvertTo-SlashPath $Glob.Trim())
+  if ($t -eq '~' -or $t.StartsWith('~/')) { $t = (ConvertTo-SlashPath $HOME).TrimEnd('/') + $t.Substring(1) }
+  return $t
+}
+
+function Get-UserLeadGlobProblem {
+  # Why a USER.md lead_writable entry is refused (the guard ignores it), or $null when it is usable.
+  param([string]$Glob)
+  $raw = $Glob.Trim()
+  $t = ConvertTo-SlashPath $raw
+  if ($t -notmatch '^(~(/|$)|/|[A-Za-z]:/)') { return 'it is not absolute or ~-relative' }
+  $t = Expand-UserGlob $raw
+  $wild = $t.IndexOfAny([char[]]@('*', '?'))
+  $prefix = if ($wild -lt 0) { $t } else { $t.Substring(0, $wild) }
+  if ($wild -ge 0 -and -not $prefix.EndsWith('/')) { $prefix = $prefix.Substring(0, [Math]::Max(0, $prefix.LastIndexOf('/') + 1)) }
+  $prefix = $prefix.TrimEnd('/')
+  $home1 = (ConvertTo-SlashPath $HOME).TrimEnd('/')
+  if ($prefix -eq '' -or $prefix -match '^[A-Za-z]:$') { return 'its fixed start is empty or a drive root' }
+  if ($prefix.Equals($home1, [System.StringComparison]::OrdinalIgnoreCase) -or $home1.StartsWith($prefix + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
+    return 'its fixed start is the home folder or a folder above it'
+  }
+  if (Test-UserLeadDeniedPath $prefix) { return 'it names settings, hooks, agent files, PROJECT.md, other ~/.claude content (only ~/.claude/notes/** is possible) or a code-execution spot' }
+  return $null
+}
+
+function Get-UserLeadWritable {
+  # The optional `lead_writable` list in the front matter of <user .claude>/team/USER.md, as slash globs
+  # with `~` expanded to the home folder. Refused entries (see Get-UserLeadGlobProblem) are dropped.
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($userDir in (Get-UserClaudeDirs)) {
+    $user = Get-FrontMatter (Join-Path $userDir 'team/USER.md')
+    foreach ($g in @($user['lead_writable'])) {
+      if ([string]::IsNullOrWhiteSpace($g)) { continue }
+      if (Get-UserLeadGlobProblem $g) { continue }
+      $out.Add((Expand-UserGlob $g))
+    }
+  }
+  return @($out)
+}
+
+function Test-UserLeadForbidden {
+  # True for a path (long, real) the lead may never write through a user lead_writable glob: the string
+  # rules above plus anything inside a git repository (work tree or bare).
+  param([string]$FullPath)
+  if (Test-UserLeadDeniedPath $FullPath) { return $true }
+  $dir = Split-Path -Parent $FullPath
+  while ($dir) {
+    if ([System.IO.Directory]::Exists((Join-Path $dir '.git')) -or [System.IO.File]::Exists((Join-Path $dir '.git'))) { return $true }
+    if ([System.IO.File]::Exists((Join-Path $dir 'HEAD')) -and [System.IO.Directory]::Exists((Join-Path $dir 'objects')) -and [System.IO.Directory]::Exists((Join-Path $dir 'refs'))) { return $true }
+    $parent = Split-Path -Parent $dir
+    if ([string]::IsNullOrEmpty($parent) -or $parent -eq $dir) { break }
+    $dir = $parent
+  }
+  return $false
+}
+
+function Test-UserLeadWritable {
+  # Throws on any internal problem: the caller must treat that as "denied".
+  param([string]$FullPath)
+  $globs = @(Get-UserLeadWritable)
+  if ($globs.Count -eq 0) { return $false }
+  $real = Resolve-RealPath (Get-LongPath $FullPath -Strict)
+  if (Test-UserLeadForbidden $real) { return $false }
+  return (Test-GlobMatch -RelPath ((ConvertTo-SlashPath $real).TrimStart('/')) -Globs $globs)
+}
+
 function Resolve-RealPath {
   # Absolute path with junctions / symlinks resolved in every component (also parent folders), so a
   # link inside an allowed folder cannot lead outside it. Components that do not exist are kept as they are.
