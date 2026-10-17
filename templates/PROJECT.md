@@ -1,9 +1,8 @@
 ---
 agent_crew_version: 0.1.0
-# Globs (relative to the repo root) the lead may edit itself, besides .claude/team/**.
-lead_writable:
-  - .claude/settings.local.json
-  - .gitignore
+# Extra globs (relative to the repo root) the lead may edit itself, besides .claude/team/**.
+# Never effective for this file, .claude/settings*.json or hook scripts: those go through the coder.
+lead_writable: []
 # Globs the lead may commit and push straight to the main branch, without a pull request.
 direct_to_main: []
 # Optional: extra agents that may write only to .claude/team/reports/ (added to the built-in

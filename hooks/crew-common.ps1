@@ -10,26 +10,81 @@ $script:CrewMaxActiveAgents = 7
 # Agents that may write only into .claude/team/reports/ (PROJECT.md report_only_agents adds to it).
 $script:CrewReportOnlyAgents = @('thinker', 'architect', 'reviewer', 'ui-reviewer', 'security-reviewer', 'perf-profiler')
 
-function Read-HookInput {
-  # Reads the hook JSON from stdin as UTF-8. Returns $null when there is none or it is invalid.
+function Read-StdinText {
+  # Reads all of stdin as UTF-8. Returns '' when there is none.
   try {
     $stream = [Console]::OpenStandardInput()
     $reader = New-Object System.IO.StreamReader($stream, (New-Object System.Text.UTF8Encoding($false)))
-    $text = $reader.ReadToEnd()
-    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
-    return ($text | ConvertFrom-Json)
+    return $reader.ReadToEnd()
   } catch {
-    return $null
+    return ''
   }
 }
 
+function ConvertFrom-HookText {
+  param([string]$Text)
+  if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+  try { return ($Text | ConvertFrom-Json) } catch { return $null }
+}
+
+function Read-HookInput {
+  # Reads the hook JSON from stdin as UTF-8. Returns $null when there is none or it is invalid.
+  return (ConvertFrom-HookText (Read-StdinText))
+}
+
+function Get-UserClaudeDirs {
+  # The user-wide Claude folders (they hold team/USER.md; they are never a project's team folder).
+  $dirs = New-Object System.Collections.Generic.List[string]
+  try {
+    if ($HOME) { $dirs.Add([System.IO.Path]::GetFullPath((Join-Path $HOME '.claude'))) }
+    if ($env:CLAUDE_CONFIG_DIR) { $dirs.Add([System.IO.Path]::GetFullPath($env:CLAUDE_CONFIG_DIR)) }
+    # This script lives in the agent-crew folder inside the Claude home when installed.
+    $crew = Split-Path -Parent $PSScriptRoot
+    if ((Split-Path -Leaf $crew) -eq 'agent-crew' -and (Test-Path -LiteralPath (Join-Path $crew 'installed.json'))) { $dirs.Add([System.IO.Path]::GetFullPath((Split-Path -Parent $crew))) }
+  } catch { }
+  return @($dirs | ForEach-Object { $_.TrimEnd([char]92, [char]47).ToLowerInvariant() })
+}
+
+function Resolve-RealPath {
+  # Absolute path with junctions / symlinks resolved in every component (also parent folders), so a
+  # link inside an allowed folder cannot lead outside it. Components that do not exist are kept as they are.
+  param([string]$Path, [int]$Depth = 0)
+  $full = [System.IO.Path]::GetFullPath($Path)
+  if ($Depth -gt 16) { return $full }
+  $root = [System.IO.Path]::GetPathRoot($full)
+  $parts = @($full.Substring($root.Length).Split([char[]]@([char]92, [char]47), [System.StringSplitOptions]::RemoveEmptyEntries))
+  $cur = $root
+  for ($i = 0; $i -lt $parts.Length; $i++) {
+    $next = [System.IO.Path]::Combine($cur, $parts[$i])
+    $isLink = $false
+    try { $isLink = (([System.IO.File]::GetAttributes($next) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) } catch { }
+    if ($isLink) {
+      $target = $null
+      try { $target = @((Get-Item -LiteralPath $next -Force).Target)[0] } catch { }
+      if ($target) {
+        $target = [string]$target
+        if ($target.Length -gt 4 -and $target[0] -eq [char]92 -and $target[1] -eq [char]63 -and $target[2] -eq [char]63 -and $target[3] -eq [char]92) { $target = $target.Substring(4) }
+        if (-not [System.IO.Path]::IsPathRooted($target)) { $target = [System.IO.Path]::Combine($cur, $target) }
+        if ($i + 1 -lt $parts.Length) { $target = [System.IO.Path]::Combine($target, ($parts[($i + 1)..($parts.Length - 1)] -join [string][char]92)) }
+        return (Resolve-RealPath -Path $target -Depth ($Depth + 1))
+      }
+    }
+    $cur = $next
+  }
+  return $cur
+}
+
 function Find-TeamRoot {
-  # Walks up from $Start to the first folder that contains .claude/team. Returns $null if none.
+  # Walks up from $Start to the first folder that contains .claude/team, skipping the user-wide
+  # ~/.claude folder (it holds team/USER.md but is not a project). Returns $null if none.
   param([string]$Start)
   if ([string]::IsNullOrWhiteSpace($Start)) { return $null }
   try { $dir = [System.IO.Path]::GetFullPath($Start) } catch { return $null }
+  $userDirs = Get-UserClaudeDirs
   while ($dir) {
-    if (Test-Path -LiteralPath (Join-Path $dir '.claude/team') -PathType Container) { return $dir }
+    $claude = (Join-Path $dir '.claude')
+    if ((Test-Path -LiteralPath (Join-Path $claude 'team') -PathType Container) -and
+        ($userDirs -notcontains $claude.TrimEnd([char]92, [char]47).ToLowerInvariant())) { return $dir }
     $parent = Split-Path -Parent $dir
     if ([string]::IsNullOrEmpty($parent) -or $parent -eq $dir) { break }
     $dir = $parent

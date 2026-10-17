@@ -92,6 +92,22 @@ try {
   $r = Invoke-Script $ledger @('-Project', 'C:\nowhere', '-ProjectsRoot', $projects)
   Check 'unknown project exits 1' ($r.Exit -eq 1)
 
+  # Warnings and prices: ids without an exact price are flagged, legacy opus is priced at its own
+  # rate, unparseable lines are reported, everything is labelled as an estimate.
+  $r = Invoke-Script $ledger @('-Project', 'C:\fixture\proj', '-ProjectsRoot', $projects, '-Format', 'json')
+  $g = $r.Out | ConvertFrom-Json
+  Check 'json output is labelled estimated' ($g.estimated -eq $true)
+  Check 'family-fallback priced models are flagged' (@($g.fallbackPricedModels) -contains 'claude-opus-5-5')
+  Check 'exactly priced models are not flagged' (@($g.fallbackPricedModels) -notcontains 'claude-haiku-4-5-20251001')
+  Check 'a request in a main file and a subagent file is counted once (subagent wins, any read order)' (($g.requests -eq 4) -and (@($g.byAgent | Where-Object { $_.Agent -eq 'bug-hunter' }).Count -eq 1))
+  $r = Invoke-Script $ledger @('-Project', 'C:\fixture\proj', '-ProjectsRoot', $projects)
+  Check 'text output has the warning and says estimated' (($r.Out -match 'WARNING: model\(s\) claude-opus-5-5') -and ($r.Out -match 'Total \(estimated\)'))
+  $r = Invoke-Script $ledger @('-Project', 'C:\fixture\legacy', '-ProjectsRoot', $projects, '-Format', 'json')
+  $g = $r.Out | ConvertFrom-Json
+  Check 'opus 4.1 at 15/MTok plus opus 4.5 at 5/MTok = 20' ([Math]::Abs($g.totalCostUsd - 20.0) -lt 1e-6) "got $($g.totalCostUsd)"
+  Check 'exactly priced ids give no fallback warning' (@($g.fallbackPricedModels).Count -eq 0)
+  Check 'an unparseable line is counted and warned about' (($g.unparsedLines -eq 1) -and (@($g.warnings | Where-Object { $_ -match 'could not be parsed' }).Count -eq 1))
+
   # ------------------------------------------------------------------ check-team
   Section 'check-team.ps1'
   $check = Join-Path $Root 'scripts\check-team.ps1'
@@ -126,7 +142,29 @@ try {
   Check 'guard: lead blocked outside .claude/team (exit 2 + reason)' (($r.Exit -eq 2) -and ($r.Err -match 'lead'))
   Check 'guard: lead may write .claude/team/state.md' ((Guard 'lead' "$pj/.claude/team/state.md").Exit -eq 0)
   Check 'guard: lead may write a lead_writable glob' ((Guard 'lead' "$pj/docs/ROADMAP.md").Exit -eq 0)
-  Check 'guard: lead may write a quoted lead_writable entry' ((Guard 'lead' "$pj/.claude/settings.local.json").Exit -eq 0)
+  Check 'guard: lead can never write settings, even if lead_writable lists it' (((Guard 'lead' "$pj/.claude/settings.local.json").Exit -eq 2) -and ((Guard 'lead' "$pj/.claude/settings.json").Exit -eq 2))
+  Check 'guard: lead can never write PROJECT.md' (((Guard 'lead' "$pj/.claude/team/PROJECT.md").Exit -eq 2) -and ((Guard 'lead' "$pj/.claude/team/project.md").Exit -eq 2))
+  Check 'guard: lead can never write hook scripts' (((Guard 'lead' "$pj/.claude/hooks/x.ps1").Exit -eq 2) -and ((Guard 'lead' "$pj/tools/agent-crew/hooks/x.ps1").Exit -eq 2))
+
+  # A wide lead_writable glob widens the lead, but never to the protected files.
+  $wide = Join-Path $Work 'wide'
+  Copy-Item -Recurse -LiteralPath $ok -Destination $wide
+  $widePj = ConvertTo-Slash $wide
+  Set-Content -LiteralPath (Join-Path $wide '.claude/team/PROJECT.md') -Value "---`nlead_writable:`n  - '**'`n---`n"
+  Check 'guard: a wide lead_writable allows ordinary files' ((Guard 'lead' "$widePj/src/a.txt" $wide).Exit -eq 0)
+  Check 'guard: ... but not PROJECT.md, settings or hooks' (((Guard 'lead' "$widePj/.claude/team/PROJECT.md" $wide).Exit -eq 2) -and ((Guard 'lead' "$widePj/.claude/settings.local.json" $wide).Exit -eq 2) -and ((Guard 'lead' "$widePj/.claude/hooks/a.ps1" $wide).Exit -eq 2))
+
+  # Junctions: a link inside an allowed folder must not lead outside it.
+  $outside = Join-Path $Work 'outside'
+  New-Item -ItemType Directory -Path $outside | Out-Null
+  New-Item -ItemType Directory -Path (Join-Path $proj '.claude/team/reports') -Force | Out-Null
+  & cmd.exe /c mklink /J (Join-Path $proj '.claude\team\lnk') $outside | Out-Null
+  & cmd.exe /c mklink /J (Join-Path $proj '.claude\team\reports\lnk2') $outside | Out-Null
+  $junctionsMade = (Test-Path (Join-Path $proj '.claude\team\lnk')) -and (Test-Path (Join-Path $proj '.claude\team\reports\lnk2'))
+  Check 'guard: test junctions were created' $junctionsMade
+  Check 'guard: lead cannot write through a junction in .claude/team' ((Guard 'lead' "$pj/.claude/team/lnk/pwn.txt").Exit -eq 2)
+  Check 'guard: thinker cannot write through a junction in reports/' ((Guard 'thinker' "$pj/.claude/team/reports/lnk2/pwn.txt").Exit -eq 2)
+  Check 'guard: ... and a normal report still works' ((Guard 'thinker' "$pj/.claude/team/reports/ok.md").Exit -eq 0)
   Check 'guard: lead relative path resolved against cwd' ((Guard 'lead' 'src/a.txt').Exit -eq 2)
   Check 'guard: lead cannot escape with ..' ((Guard 'lead' "$pj/.claude/team/../../src/a.txt").Exit -eq 2)
   Check 'guard: lead blocked outside the project' ((Guard 'lead' "$(ConvertTo-Slash $Work)/other.txt").Exit -eq 2)
@@ -214,7 +252,8 @@ try {
   $install = Join-Path $Root 'install.ps1'
   $home1 = Join-Path $Work 'claude-home'
   New-Item -ItemType Directory -Path $home1 | Out-Null
-  $existing = @{ model = 'opus'; hooks = @{ PreToolUse = @(@{ matcher = 'Bash'; hooks = @(@{ type = 'command'; command = 'echo mine' }) }) }; other = @{ keep = 'me' } }
+  $mineCmd = 'powershell -File "C:\somewhere\agent-crew\hooks\mine.ps1"'
+  $existing = @{ model = 'opus'; hooks = @{ PreToolUse = @(@{ matcher = 'Bash'; hooks = @(@{ type = 'command'; command = 'echo mine' }) }, @{ matcher = 'Edit'; hooks = @(@{ type = 'command'; command = $mineCmd }) }) }; other = @{ keep = 'me' } }
   [System.IO.File]::WriteAllText((Join-Path $home1 'settings.json'), ($existing | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
 
   $r = Invoke-Script $install @('-ClaudeHome', $home1)
@@ -223,13 +262,13 @@ try {
   Check 'skills installed' (Test-Path "$home1\skills\crew-retro\SKILL.md")
   Check 'runtime payload installed' ((Test-Path "$home1\agent-crew\hooks\guard-paths.ps1") -and (Test-Path "$home1\agent-crew\scripts\ledger.ps1") -and (Test-Path "$home1\agent-crew\VERSION") -and (Test-Path "$home1\agent-crew\installed.json"))
   Check 'USER.md copied when missing' (Test-Path "$home1\team\USER.md")
-  Check 'hook token rendered in lead.md' ((Get-Content -Raw "$home1\agents\lead.md") -match 'agent-crew\\hooks\\guard-paths\.ps1' -and (Get-Content -Raw "$home1\agents\lead.md") -notmatch '@@HOOK')
+  Check 'agents carry no hooks front matter and no tokens (the guard is registered once, in settings.json)' (-not (Select-String -Path "$home1\agents\*.md" -Pattern '^hooks:|@@HOOK' -Quiet))
   Check 'a backup of settings.json was made' (@(Get-ChildItem $home1 -Filter 'settings.json.bak-*').Count -eq 1)
   $s = Get-Content -Raw "$home1\settings.json" | ConvertFrom-Json
   Check 'settings: own keys kept' (($s.model -eq 'opus') -and ($s.other.keep -eq 'me'))
   Check 'settings: user hook kept' (@($s.hooks.PreToolUse | Where-Object { $_.matcher -eq 'Bash' }).Count -eq 1)
   foreach ($ev in 'PreToolUse', 'PostToolUse', 'PreCompact', 'PostCompact', 'SessionStart') {
-    $n = @(@($s.hooks.$ev) | ForEach-Object { @($_.hooks) } | Where-Object { $_.command -match 'agent-crew' }).Count
+    $n = @(@($s.hooks.$ev) | ForEach-Object { @($_.hooks) } | Where-Object { $_.command -match [regex]::Escape("$home1" + [char]92 + 'agent-crew') }).Count
     Check "settings: exactly one $ev entry of agent-crew" ($n -eq 1) "found $n"
   }
   $before = Get-Content -Raw "$home1\settings.json"
@@ -262,7 +301,7 @@ try {
   Check '-Update writes a .new next to the edited file' ((Test-Path "$edited.new") -and ((Get-Content -Raw "$edited.new") -notmatch 'MY LOCAL EDIT'))
   Check '-Update never touches USER.md' ((Get-Content -Raw "$home1\team\USER.md") -match 'my prefs')
   $s = Get-Content -Raw "$home1\settings.json" | ConvertFrom-Json
-  Check '-Update keeps one entry per hook' (@(@($s.hooks.SessionStart) | ForEach-Object { @($_.hooks) } | Where-Object { $_.command -match 'agent-crew' }).Count -eq 1)
+  Check '-Update keeps one entry per hook' (@(@($s.hooks.SessionStart) | ForEach-Object { @($_.hooks) } | Where-Object { $_.command -match [regex]::Escape("$home1" + [char]92 + 'agent-crew') }).Count -eq 1)
 
   # -Uninstall
   $r = Invoke-Script $install @('-ClaudeHome', $home1, '-Uninstall')
@@ -272,22 +311,69 @@ try {
   Check 'uninstall keeps an edited USER.md' (Test-Path "$home1\team\USER.md")
   Check 'uninstall removes the runtime copy' (-not (Test-Path "$home1\agent-crew"))
   $s = Get-Content -Raw "$home1\settings.json" | ConvertFrom-Json
-  $left = @($s.hooks.PSObject.Properties | ForEach-Object { @($_.Value) } | ForEach-Object { @($_.hooks) } | Where-Object { $_.command -match 'agent-crew' }).Count
+  $left = @($s.hooks.PSObject.Properties | ForEach-Object { @($_.Value) } | ForEach-Object { @($_.hooks) } | Where-Object { $_.command -match [regex]::Escape("$home1" + [char]92 + 'agent-crew') }).Count
   Check 'uninstall removes the hook entries' ($left -eq 0)
+  Check 'uninstall keeps a user hook that merely points into some agent-crew folder' (@($s.hooks.PreToolUse | Where-Object { $_.matcher -eq 'Edit' -and $_.hooks[0].command -eq $mineCmd }).Count -eq 1)
   Check 'uninstall keeps the user hook and keys' (($s.model -eq 'opus') -and (@($s.hooks.PreToolUse | Where-Object { $_.matcher -eq 'Bash' }).Count -eq 1) -and ($s.other.keep -eq 'me'))
 
   # -NoSettings on a fresh folder
   $home2 = Join-Path $Work 'claude-home2'
   $r = Invoke-Script $install @('-ClaudeHome', $home2, '-NoSettings')
   Check '-NoSettings does not create settings.json' (($r.Exit -eq 0) -and -not (Test-Path "$home2\settings.json") -and (Test-Path "$home2\agents\lead.md"))
-  # an invalid settings.json is left alone
+  # an invalid settings.json (JSONC comment) is refused before anything is changed
   $home3 = Join-Path $Work 'claude-home3'
   New-Item -ItemType Directory -Path $home3 | Out-Null
-  Set-Content -LiteralPath "$home3\settings.json" -Value '{ broken'
+  Set-Content -LiteralPath "$home3\settings.json" -Value "{ // comment`n  `"a`": 1 }"
   $r = Invoke-Script $install @('-ClaudeHome', $home3)
-  Check 'invalid settings.json is not touched' (((Get-Content -Raw "$home3\settings.json").Trim() -eq '{ broken') -and ($r.Exit -ne 0))
+  Check 'invalid settings.json: install refuses with exit 1 and a message' (($r.Exit -ne 0) -and ($r.Out -match 'Nothing was changed'))
+  Check '... and leaves no half-install behind' (-not (Test-Path "$home3\agents") -and -not (Test-Path "$home3\agent-crew") -and -not (Test-Path "$home3\skills") -and ((Get-Content -Raw "$home3\settings.json") -match 'comment'))
+  # ... also for -Uninstall: files stay, so the hook entries never point to deleted scripts
+  $home4 = Join-Path $Work 'claude-home4'
+  [void](Invoke-Script $install @('-ClaudeHome', $home4))
+  Add-Content -LiteralPath "$home4\settings.json" -Value '// trailing comment'
+  $r = Invoke-Script $install @('-ClaudeHome', $home4, '-Uninstall')
+  Check 'invalid settings.json: uninstall refuses and removes nothing' (($r.Exit -ne 0) -and (Test-Path "$home4\agents\lead.md") -and (Test-Path "$home4\agent-crew\hooks\guard-paths.ps1") -and (Test-Path "$home4\agent-crew\installed.json"))
+
+  # empty-folder cleanup never removes agents/, skills/ or team/
+  $home5 = Join-Path $Work 'claude-home5'
+  [void](Invoke-Script $install @('-ClaudeHome', $home5, '-NoSettings'))
+  [void](Invoke-Script $install @('-ClaudeHome', $home5, '-NoSettings', '-Uninstall'))
+  Check 'uninstall keeps the agents, skills and team folders' ((Test-Path "$home5\agents") -and (Test-Path "$home5\skills") -and (Test-Path "$home5\team"))
+  Check '... but removes the crew skill folders and agent-crew' (-not (Test-Path "$home5\skills\crew-retro") -and -not (Test-Path "$home5\agent-crew"))
+
+  # at most 3 settings.json backups
+  $home6 = Join-Path $Work 'claude-home6'
+  New-Item -ItemType Directory -Path $home6 | Out-Null
+  Set-Content -LiteralPath "$home6\settings.json" -Value '{ "model": "opus" }'
+  1..4 | ForEach-Object {
+    [void](Invoke-Script $install @('-ClaudeHome', $home6))
+    [void](Invoke-Script $install @('-ClaudeHome', $home6, '-Uninstall'))
+  }
+  $baks = @(Get-ChildItem $home6 -Filter 'settings.json.bak-*').Count
+  Check 'at most 3 settings.json backups are kept' ($baks -eq 3) "found $baks"
+
+  # A project under a user home that has ~/.claude/team (from USER.md) is not mistaken for a team folder.
+  $fh = Join-Path $Work 'fakehome'
+  [void](Invoke-Script $install @('-ClaudeHome', "$fh\.claude", '-NoSettings'))
+  $newproj = Join-Path (Join-Path $fh 'code') 'newproj'
+  New-Item -ItemType Directory -Path $newproj -Force | Out-Null
+  $fhHooks = "$fh\.claude\agent-crew\hooks"
+  $np = ConvertTo-Slash $newproj
+  $json = '{"cwd":"' + $np + '","agent_type":"lead","tool_input":{"file_path":"' + $np + '/.claude/team/routing.md"}}'
+  $r = Invoke-Script "$fhHooks\guard-paths.ps1" @() $json
+  Check 'bootstrap: the lead may create .claude/team in a project under a home that has ~/.claude/team' ($r.Exit -eq 0) $r.Err
+  $json = '{"cwd":"' + $np + '","agent_type":"lead","tool_input":{"file_path":"' + $np + '/src/a.txt"}}'
+  Check 'bootstrap: ... the guard stays a no-op there' ((Invoke-Script "$fhHooks\guard-paths.ps1" @() $json).Exit -eq 0)
+  $r = Invoke-Script "$fhHooks\session-start.ps1" @() ('{"cwd":"' + $np + '","source":"startup"}')
+  Check 'session-start: no retro nag in a project without its own .claude/team' ($r.Out.Trim() -eq '') $r.Out
+  # ... while a real project team folder below that home still works
+  New-Item -ItemType Directory -Path "$newproj\.claude\team" -Force | Out-Null
+  $json = '{"cwd":"' + $np + '","agent_type":"lead","tool_input":{"file_path":"' + $np + '/src/a.txt"}}'
+  Check 'a real .claude/team in the project is found again' ((Invoke-Script "$fhHooks\guard-paths.ps1" @() $json).Exit -eq 2)
 }
 finally {
+  # Junctions first, so recursive removal never follows them.
+  foreach ($j in @(Get-ChildItem -LiteralPath $Work -Recurse -Force -Attributes ReparsePoint -ErrorAction SilentlyContinue)) { & cmd.exe /c rmdir "$($j.FullName)" | Out-Null }
   Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
 }
 

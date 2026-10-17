@@ -61,7 +61,6 @@ rec_save() {
   } > "$RECORD"
 }
 
-hook_cmd() { printf 'pwsh -NoProfile -ExecutionPolicy Bypass -File "%s/hooks/%s.ps1"' "$CREW" "$1"; }
 
 # ---- settings.json merge (python)
 settings_edit() { # $1 = install | uninstall
@@ -73,12 +72,17 @@ plan = [("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", "guard-paths"),
         ("PostToolUse", "Edit|Write|MultiEdit|NotebookEdit", "check-caps"),
         ("PreCompact", None, "pre-compact"), ("PostCompact", None, "post-compact"),
         ("SessionStart", None, "session-start")]
-ours = re.compile(r"agent-crew[\\/]+hooks[\\/]")
 def cmd(s): return 'pwsh -NoProfile -ExecutionPolicy Bypass -File "%s/hooks/%s.ps1"' % (crew, s)
+ours_cmds = set(cmd(p[2]) for p in plan)
+class Ours:
+    def search(self, c): return c in ours_cmds
+ours = Ours()
 try:
     data = json.load(open(path, encoding="utf-8")) if os.path.exists(path) and os.path.getsize(path) else {}
 except ValueError as e:
     sys.exit("settings.json is not valid JSON, not touching it: %s" % e)
+if not isinstance(data, dict): sys.exit("settings.json must contain a JSON object")
+if mode == "check": sys.exit(0)
 before = json.dumps(data, sort_keys=True)
 hooks = data.get("hooks", {})
 for event in list(hooks):
@@ -100,11 +104,18 @@ else: data.pop("hooks", None)
 if json.dumps(data, sort_keys=True) == before:
     print("  settings.json: nothing to change"); sys.exit(0)
 if os.path.exists(path):
-    backup = path + ".bak-" + time.strftime("%Y%m%d-%H%M%S")
+    backup = path + ".bak-" + time.strftime("%Y%m%d-%H%M%S") + "-%03d" % (int(time.time() * 1000) % 1000)
     shutil.copy2(path, backup); print("  settings.json updated (backup: %s)" % backup)
+    for old in sorted(f for f in os.listdir(os.path.dirname(path)) if f.startswith("settings.json.bak-"))[:-3]:
+        os.remove(os.path.join(os.path.dirname(path), old))
 json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
 PYEOF
 }
+
+# ---- validate settings.json FIRST: nothing is changed unless it parses
+if [ "$NO_SETTINGS" != 1 ] && [ -f "$SETTINGS" ] && [ -n "$PY" ]; then
+  settings_edit check || { echo "Nothing was changed. Fix or remove settings.json, or use --no-settings." >&2; exit 1; }
+fi
 
 # ---- uninstall
 if [ "$UNINSTALL" = 1 ]; then
@@ -117,7 +128,7 @@ if [ "$UNINSTALL" = 1 ]; then
     [ -f "$f" ] || continue
     if [ "$(sha "$f")" = "$hash" ]; then rm -f "$f"; removed=$((removed+1)); else echo "  kept (you edited it): $key"; kept=$((kept+1)); fi
     d=$(dirname "$f")
-    while [ "$d" != "$CLAUDE_HOME" ] && rmdir "$d" 2>/dev/null; do d=$(dirname "$d"); done
+    while [ "$d" != "$CLAUDE_HOME" ] && [ "$d" != "$CLAUDE_HOME/agents" ] && [ "$d" != "$CLAUDE_HOME/skills" ] && [ "$d" != "$CLAUDE_HOME/team" ] && rmdir "$d" 2>/dev/null; do d=$(dirname "$d"); done
   done < "$TMP_REC"
   rm -f "$RECORD"; rmdir "$CREW" 2>/dev/null || true
   [ "$NO_SETTINGS" = 1 ] || settings_edit uninstall
@@ -131,7 +142,7 @@ echo "Installing agent-crew $VERSION in $CLAUDE_HOME"
 mkdir -p "$CREW"
 PLAN=$(mktemp)
 {
-  for f in "$SRC"/agents/*.md; do printf '%s|agents/%s|render|always\n' "$f" "$(basename "$f")"; done
+  for f in "$SRC"/agents/*.md; do printf '%s|agents/%s|plain|always\n' "$f" "$(basename "$f")"; done
   (cd "$SRC/skills" && find . -type f | sed 's|^\./||') | while read -r r; do printf '%s|skills/%s|plain|always\n' "$SRC/skills/$r" "$r"; done
   for d in hooks scripts data templates catalog; do
     (cd "$SRC/$d" && find . -type f | sed 's|^\./||') | while read -r r; do printf '%s|agent-crew/%s/%s|plain|always\n' "$SRC/$d/$r" "$d" "$r"; done
@@ -145,16 +156,7 @@ new=0; same=0; updated=0; pending=0; dotnew=0
 RENDERED=$(mktemp)
 while IFS='|' read -r src key mode when; do
   dest="$CLAUDE_HOME/$key"
-  if [ "$mode" = render ]; then
-    # @@HOOK:name@@ -> hook command; single quotes doubled for YAML single-quoted strings
-    cp "$src" "$RENDERED"
-    for name in $(grep -o '@@HOOK:[a-z-]*@@' "$src" | sort -u | sed 's/@@HOOK:\(.*\)@@/\1/'); do
-      c=$(hook_cmd "$name" | sed "s/'/''/g; s/[&|\\\\]/\\\\&/g")
-      sed "s|@@HOOK:$name@@|$c|g" "$RENDERED" > "$RENDERED.2"; mv "$RENDERED.2" "$RENDERED"
-    done
-  else
-    cp "$src" "$RENDERED"
-  fi
+  cp "$src" "$RENDERED"
   newhash=$(sha "$RENDERED")
   if [ ! -f "$dest" ]; then
     if [ "$when" = missing ] && [ -n "$(rec_get "$key")" ]; then continue; fi

@@ -46,24 +46,25 @@ as `trial`.
 
 ## 4. Write `.claude/team/`
 
-Create the folder and these files (Write tool; the lead may write `.claude/team/**`):
+The lead writes the files that are its own (a hook blocks the file-edit tools elsewhere):
+- `routing.md` from `$CREW/templates/routing.md`; delete table rows for agents that are not in the roster.
+- `roster.md` from the template: only the agents of the roster, status `trial` for catalog roles.
+- `state.md` from the template, with the Goal filled and `updated:` set to the current time.
+- `.last-retro` containing the current ISO timestamp (so the retro is not due at once).
+- no `reports/` or `snapshots/` folder: agents and hooks create them when first needed.
+
+The lead may NOT write `PROJECT.md`, `.claude/settings.local.json` or `.gitignore`. Instead it
+drafts them into `.claude/team/reports/bootstrap-PROJECT.md`, `bootstrap-settings.local.json`
+and `bootstrap-gitignore.txt`, then gives one `coder` job (sonnet/low) with the absolute draft
+paths to put them in place on a branch with a pull request (`PROJECT.md` is committed; the
+`.gitignore` lines too):
 - `PROJECT.md` from `$CREW/templates/PROJECT.md`: fill Context, Commands (exact commands from
   step 1, with notes), Hazards, Conventions, Decision policy, Lead may run; set
   `agent_crew_version` to the content of `$CREW/VERSION`; set `direct_to_main` only to what the
-  user named in question 5; keep `lead_writable`.
-- `routing.md` from the template; delete table rows for agents that are not in the roster.
-- `roster.md` from the template: only the agents of the roster, status `trial` for catalog roles.
-- `state.md` from the template, with the Goal filled and `updated:` set to the current time.
-- no `reports/` or `snapshots/` folder: agents and hooks create them when first needed.
-- `.last-retro` containing the current ISO timestamp (so the retro is not due at once).
-
-Copy each chosen catalog agent unchanged from `$CREW/catalog/<name>.md` to the project's
-`.claude/agents/<name>.md` with a shell copy command (the one exception where the lead
-copies a file outside `.claude/team/`; later edits to it go through `coder`).
-
-Write `.claude/settings.local.json` from `$CREW/templates/settings.local.json`: if the file
-exists, add only the missing keys. The values are guesses; tell the user they can change
-them. Add these lines to `.gitignore` if missing (create the file if needed):
+  user named in question 5; leave `lead_writable: []` unless the user names a safe extra glob.
+- `.claude/settings.local.json` from `$CREW/templates/settings.local.json`: if the file exists,
+  add only the missing keys. The values are guesses; tell the user they can change them.
+- `.gitignore`: add these lines if missing (create the file if needed):
 
 ```
 .claude/settings.local.json
@@ -74,15 +75,14 @@ them. Add these lines to `.gitignore` if missing (create the file if needed):
 .claude/team/.last-retro
 ```
 
-Do not commit anything now: the new files are left as working-tree changes. Tell the user
-the `.gitignore` change and `PROJECT.md`, `routing.md`, `roster.md` should be committed
-through a normal pull request (the next `coder` job can include them).
+Copy each chosen catalog agent unchanged from `$CREW/catalog/<name>.md` to the project's
+`.claude/agents/<name>.md` as part of that same coder job (give it the catalog path).
 
 ## 5. Check and report
 
-Run `powershell -NoProfile -File "$HOME\.claude\agent-crew\scripts\check-team.ps1" -Project .`
+After the coder job is done, run `powershell -NoProfile -File "$HOME\.claude\agent-crew\scripts\check-team.ps1" -Project .`
 (on a machine without PowerShell skip it and say so). Fix what it reports.
 
-Tell the user in at most 8 lines: what was created, the roster, the commands you wrote into
+Tell the user in at most 8 lines: what was created, the roster, the commands you put into
 PROJECT.md, what you guessed, and the suggestion to paste
 `$CREW/templates/compact-instructions.md` into the project's `CLAUDE.md` (a coder job).

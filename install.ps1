@@ -65,16 +65,22 @@ function Get-HookCommand([string]$Script) {
   return ('powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $path)
 }
 
+# Exactly the commands this installer writes (plus the ones recorded by an earlier run in
+# installed.json). A user's own hook that merely points into some agent-crew folder is never ours.
+$script:OurCommands = @($HookPlan | ForEach-Object { Get-HookCommand $_.Script })
+
 function Test-IsOurHook([string]$Command) {
-  return ($Command -match 'agent-crew[\\/]+hooks[\\/]')
+  return ($script:OurCommands -contains $Command)
 }
 
 function Read-Record {
-  $rec = [ordered]@{ version = $null; files = [ordered]@{} }
+  $rec = [ordered]@{ version = $null; files = [ordered]@{}; hookCommands = @() }
   if (Test-Path -LiteralPath $RecordPath -PathType Leaf) {
     $j = [System.IO.File]::ReadAllText($RecordPath) | ConvertFrom-Json
     $rec.version = $j.version
     if ($j.files) { foreach ($p in $j.files.PSObject.Properties) { $rec.files[$p.Name] = [string]$p.Value } }
+    if ($j.hookCommands) { $rec.hookCommands = @($j.hookCommands | ForEach-Object { [string]$_ }) }
+    $script:OurCommands = @($script:OurCommands) + @($rec.hookCommands) | Select-Object -Unique
   }
   return $rec
 }
@@ -85,6 +91,7 @@ function Save-Record($Rec) {
     version     = $Rec.version
     installedAt = (Get-Date).ToString('o')
     claudeHome  = $ClaudeHome
+    hookCommands = @($script:OurCommands | Select-Object -First $HookPlan.Count)
     files       = $Rec.files
   }
   [System.IO.File]::WriteAllText($RecordPath, ($obj | ConvertTo-Json -Depth 5), $Utf8)
@@ -94,39 +101,32 @@ function New-Dir([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Path $Path -Force | Out-Null }
 }
 
-# The files to install: @{ Src; Dest; Render; IfMissing }
+# The files to install: @{ Src; Dest; IfMissing }
 function Get-Plan {
   $plan = New-Object System.Collections.Generic.List[object]
   foreach ($f in (Get-ChildItem -LiteralPath (Join-Path $Source 'agents') -Filter '*.md' -File)) {
-    $plan.Add(@{ Src = $f.FullName; Dest = (Join-Path $ClaudeHome "agents\$($f.Name)"); Render = $true; IfMissing = $false })
+    $plan.Add(@{ Src = $f.FullName; Dest = (Join-Path $ClaudeHome "agents\$($f.Name)"); IfMissing = $false })
   }
   $skillsRoot = Join-Path $Source 'skills'
   foreach ($f in (Get-ChildItem -LiteralPath $skillsRoot -Recurse -File)) {
     $rel = $f.FullName.Substring($skillsRoot.Length).TrimStart('\', '/')
-    $plan.Add(@{ Src = $f.FullName; Dest = (Join-Path $ClaudeHome "skills\$rel"); Render = $false; IfMissing = $false })
+    $plan.Add(@{ Src = $f.FullName; Dest = (Join-Path $ClaudeHome "skills\$rel"); IfMissing = $false })
   }
   foreach ($dir in 'hooks', 'scripts', 'data', 'templates', 'catalog') {
     $root = Join-Path $Source $dir
     foreach ($f in (Get-ChildItem -LiteralPath $root -Recurse -File)) {
       $rel = $f.FullName.Substring($root.Length).TrimStart('\', '/')
-      $plan.Add(@{ Src = $f.FullName; Dest = (Join-Path $CrewDir "$dir\$rel"); Render = $false; IfMissing = $false })
+      $plan.Add(@{ Src = $f.FullName; Dest = (Join-Path $CrewDir "$dir\$rel"); IfMissing = $false })
     }
   }
-  $plan.Add(@{ Src = (Join-Path $Source 'docs\RULES.md'); Dest = (Join-Path $CrewDir 'docs\RULES.md'); Render = $false; IfMissing = $false })
-  $plan.Add(@{ Src = (Join-Path $Source 'VERSION'); Dest = (Join-Path $CrewDir 'VERSION'); Render = $false; IfMissing = $false })
-  $plan.Add(@{ Src = (Join-Path $Source 'templates\USER.md'); Dest = (Join-Path $ClaudeHome 'team\USER.md'); Render = $false; IfMissing = $true })
+  $plan.Add(@{ Src = (Join-Path $Source 'docs\RULES.md'); Dest = (Join-Path $CrewDir 'docs\RULES.md'); IfMissing = $false })
+  $plan.Add(@{ Src = (Join-Path $Source 'VERSION'); Dest = (Join-Path $CrewDir 'VERSION'); IfMissing = $false })
+  $plan.Add(@{ Src = (Join-Path $Source 'templates\USER.md'); Dest = (Join-Path $ClaudeHome 'team\USER.md'); IfMissing = $true })
   return $plan
 }
 
 function Get-SourceBytes($Item) {
-  $bytes = [System.IO.File]::ReadAllBytes($Item.Src)
-  if (-not $Item.Render) { return , $bytes }
-  $text = $Utf8.GetString($bytes)
-  $text = [regex]::Replace($text, '@@HOOK:([a-z\-]+)@@', {
-      param($m)
-      return (Get-HookCommand $m.Groups[1].Value).Replace("'", "''")
-    })
-  return , $Utf8.GetBytes($text)
+  return , [System.IO.File]::ReadAllBytes($Item.Src)
 }
 
 # ---------- settings.json ----------
@@ -142,8 +142,11 @@ function Read-Settings {
 function Save-Settings($Settings) {
   $backup = $null
   if (Test-Path -LiteralPath $SettingsPath -PathType Leaf) {
-    $backup = "$SettingsPath.bak-" + (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $backup = "$SettingsPath.bak-" + (Get-Date).ToString('yyyyMMdd-HHmmss-fff')
     Copy-Item -LiteralPath $SettingsPath -Destination $backup
+    # Keep only the newest 3 backups.
+    $old = @(Get-ChildItem -LiteralPath (Split-Path -Parent $SettingsPath) -Filter 'settings.json.bak-*' -File | Sort-Object Name -Descending | Select-Object -Skip 3)
+    foreach ($f in $old) { Remove-Item -LiteralPath $f.FullName -Force }
   } else {
     New-Dir (Split-Path -Parent $SettingsPath)
   }
@@ -198,7 +201,7 @@ function Test-HooksCurrent($Settings) {
 }
 
 function Install-Hooks {
-  $settings = Read-Settings
+  $settings = $script:ParsedSettings
   if (Test-HooksCurrent $settings) { Write-Host '  settings.json: hook entries already current'; return }
   [void](Remove-OurHooks $settings)
   if (-not $settings.PSObject.Properties['hooks']) { $settings | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) }
@@ -215,9 +218,24 @@ function Install-Hooks {
 
 function Uninstall-Hooks {
   if (-not (Test-Path -LiteralPath $SettingsPath -PathType Leaf)) { return }
-  $settings = Read-Settings
+  $settings = $script:ParsedSettings
   if (Remove-OurHooks $settings) { Save-Settings $settings; Write-Host '  settings.json: hook entries removed' }
   else { Write-Host '  settings.json: no hook entries of agent-crew found' }
+}
+
+# ---------- validate settings.json FIRST ----------
+# Nothing is copied, removed or recorded unless settings.json can be parsed (no half-installs).
+
+$script:ParsedSettings = $null
+if (-not $NoSettings) {
+  try {
+    $script:ParsedSettings = Read-Settings
+    if ($script:ParsedSettings -isnot [System.Management.Automation.PSCustomObject]) { throw "settings.json must contain a JSON object: $SettingsPath" }
+  } catch {
+    Write-Host ("ERROR: " + $_.Exception.Message)
+    Write-Host 'Nothing was changed. Fix or remove the file (comments are not allowed), or use -NoSettings.'
+    exit 1
+  }
 }
 
 # ---------- uninstall ----------
@@ -236,10 +254,11 @@ if ($Uninstall) {
       Write-Host "  kept (you edited it): $key"; $kept++
     }
   }
-  # Remove folders that became empty, deepest first, but never the agents/skills/team roots themselves.
+  # Remove folders that became empty, deepest first, but never the Claude home or its agents, skills and team folders.
+  $protected = @($ClaudeHome, (Join-Path $ClaudeHome 'agents'), (Join-Path $ClaudeHome 'skills'), (Join-Path $ClaudeHome 'team')) | ForEach-Object { $_.TrimEnd([char]92, [char]47).ToLowerInvariant() }
   foreach ($key in ($rec.files.Keys | Sort-Object { $_.Length } -Descending)) {
-    $dir = Split-Path -Parent (Join-Path $ClaudeHome ($key.Replace('/', '\')))
-    while ($dir.Length -gt $ClaudeHome.Length) {
+    $dir = Split-Path -Parent (Join-Path $ClaudeHome ($key.Replace('/', [string][char]92)))
+    while ($dir.Length -gt $ClaudeHome.Length -and ($protected -notcontains $dir.TrimEnd([char]92, [char]47).ToLowerInvariant())) {
       if ((Test-Path -LiteralPath $dir) -and -not (Get-ChildItem -LiteralPath $dir -Force)) { Remove-Item -LiteralPath $dir -Force }
       $dir = Split-Path -Parent $dir
     }
@@ -320,7 +339,7 @@ $rec.version = $version
 Save-Record $rec
 
 if ($NoSettings) {
-  Write-Host '  settings.json: skipped (-NoSettings). The hooks then run only where an agent file lists them.'
+  Write-Host '  settings.json: skipped (-NoSettings). The guard and the other hooks are then NOT registered.'
 } else {
   Install-Hooks
 }

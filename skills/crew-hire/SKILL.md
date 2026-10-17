@@ -39,8 +39,8 @@ State the evidence in the proposal (which briefs, which failures).
 2. Do it:
    - addendum or skill: write the file (addenda are under `.claude/team/`, which the lead may
      write; a project skill is a `coder` job);
-   - catalog agent: copy `$CREW/catalog/<name>.md` unchanged to `.claude/agents/<name>.md` with
-     a shell copy command; any edit goes through `coder`;
+   - catalog agent: the `coder` copies `$CREW/catalog/<name>.md` unchanged to
+     `.claude/agents/<name>.md` (give it the path); the lead does not write there;
    - new agent: the `coder` writes `.claude/agents/<name>.md` from your brief (frontmatter:
      name, one-line description, tools, model, effort).
 3. Add the row to `roster.md` (why, evidence, status `trial`, uses 0, retire criterion) and a

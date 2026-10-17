@@ -21,3 +21,8 @@ First version.
   `-Uninstall`; file hashes are recorded so edited files are never overwritten.
 - `docs/RULES.md`: the generic rules and the evidence behind them.
 - Prices in `data/prices.json` are a best-knowledge guess and must be verified.
+- The guard (`guard-paths`) resolves junctions and symlinks, never lets the lead edit `PROJECT.md`,
+  settings or hook scripts, ignores the user-wide `~/.claude` folder as a project, and is registered
+  once, in settings.json. The installer validates `settings.json` before changing anything, matches
+  only its own exact hook commands, and keeps at most 3 backups. The ledger flags models without an
+  exact price, warns about lines it could not parse, and labels every cost as an estimate.

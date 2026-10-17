@@ -6,7 +6,8 @@ description: Periodic retrospective of the agent team. Measures real token cost 
 # crew-retro
 
 Run by the lead. `$CREW` is `~/.claude/agent-crew` (Windows: `$HOME\.claude\agent-crew`).
-Work inside `.claude/team/` only. Be short: this is housekeeping, not a report.
+Edit only `.claude/team/` files other than `PROJECT.md` yourself; a change to `PROJECT.md` (or any
+project file) is a `coder` job. Be short: this is housekeeping, not a report.
 
 ## 1. Measure
 
@@ -34,7 +35,7 @@ context size, not spend; only the ledger is spend.
 Caps: `state.md` 50 lines, `routing.md` 150, `roster.md` 80. For each file over its cap, or
 holding old items: move knowledge to its cold home instead of deleting it.
 - finished work: delete from `state.md`;
-- hazards and conventions that are stable: `PROJECT.md`;
+- hazards and conventions that are stable: `PROJECT.md` (a coder job);
 - how the project works: the project's own docs (a coder job);
 - agent-specific rules: `.claude/team/roles/<agent>.md`;
 - old evidence lines: merge several into one rule under "Learned rules", drop the rest.

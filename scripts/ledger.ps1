@@ -39,7 +39,8 @@ $ErrorActionPreference = 'Stop'
 
 function Get-ProjectSlug([string]$Path) {
   # Claude Code names the transcript folder after the project path, every non-alphanumeric
-  # character replaced by '-' (Z:\GameDev\Sim -> Z--GameDev-Sim).
+  # character replaced by '-' (C:\work\app -> C--work-app). Known limit: Claude Code shortens and hashes
+  # very long paths (over about 200 characters); such a project is not found here.
   $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
   return ($full -replace '[^A-Za-z0-9]', '-')
 }
@@ -77,28 +78,34 @@ function Read-Meta([string]$JsonlPath) {
 }
 
 function Get-PriceFor([string]$ModelId, $PriceTable) {
+  # The entry with the longest matching prefix wins, so exact model ids beat family fallbacks.
   if (-not $ModelId) { return $null }
   $id = $ModelId.ToLowerInvariant()
-  foreach ($prop in $PriceTable.families.PSObject.Properties) {
-    foreach ($prefix in $prop.Value.prefixes) {
-      if ($id.StartsWith($prefix)) { return $prop.Value }
+  $best = $null; $bestLen = -1
+  foreach ($entry in $PriceTable.models) {
+    foreach ($prefix in $entry.prefixes) {
+      if ($id.StartsWith($prefix) -and $prefix.Length -gt $bestLen) { $best = $entry; $bestLen = $prefix.Length }
     }
   }
-  return $null
+  return $best
 }
 
 function Add-Request($Table, $Req) {
-  # Keeps, per request id, the record with the most output tokens (streaming writes several).
-  if ($Table.ContainsKey($Req.Key)) {
-    if ($Req.Out -ge $Table[$Req.Key].Out) { $Table[$Req.Key] = $Req }
-  } else {
-    $Table[$Req.Key] = $Req
+  # One record per request id. A copy in a subagent file wins over a copy in a main file (so the
+  # result does not depend on read order); otherwise the record with the most output tokens wins
+  # (streaming writes several), and the first one read wins a tie.
+  if (-not $Table.ContainsKey($Req.Key)) { $Table[$Req.Key] = $Req; return }
+  $old = $Table[$Req.Key]
+  if ($Req.IsSub -ne $old.IsSub) {
+    if ($Req.IsSub) { $Table[$Req.Key] = $Req }
+    return
   }
+  if ($Req.Out -gt $old.Out) { $Table[$Req.Key] = $Req }
 }
 
 function Read-Transcript {
   param([string]$Path, [string]$AgentType, [string]$MetaModel, [string]$MetaEffort,
-        [string]$SessionId, [string]$AgentFile, $Table, [string]$SinceIso)
+        [string]$SessionId, [string]$AgentFile, [bool]$IsSub, $Table, [string]$SinceIso)
   $reader = New-Object System.IO.StreamReader($Path, (New-Object System.Text.UTF8Encoding($false)), $true, 1048576)
   $bad = 0
   try {
@@ -131,7 +138,7 @@ function Read-Transcript {
 
       Add-Request $Table ([pscustomobject]@{
           Key = $key; Agent = $AgentType; Model = $groupModel; PriceModel = $model; Effort = $effort
-          Session = $SessionId; AgentFile = $AgentFile
+          Session = $SessionId; AgentFile = $AgentFile; IsSub = $IsSub
           In = [long]$u.input_tokens; Out = [long]$u.output_tokens
           C5 = $c5; C1 = $c1; CR = [long]$u.cache_read_input_tokens
         })
@@ -177,6 +184,7 @@ function Format-MdTable([string[]]$Headers, [object[][]]$Rows, [bool[]]$Right) {
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $Prices) { $Prices = Join-Path (Split-Path -Parent $scriptRoot) 'data\prices.json' }
 $priceTable = [System.IO.File]::ReadAllText($Prices) | ConvertFrom-Json
+$fallbackModels = New-Object System.Collections.Generic.HashSet[string]
 
 if (-not $MainAgent) { $MainAgent = Get-MainAgentName $Project }
 
@@ -202,21 +210,21 @@ $requests = @{}
 $bad = 0
 $spawnFiles = New-Object System.Collections.Generic.HashSet[string]
 
-foreach ($main in (Get-ChildItem -LiteralPath $folder -Filter '*.jsonl' -File)) {
+foreach ($main in (Get-ChildItem -LiteralPath $folder -Filter '*.jsonl' -File | Sort-Object Name)) {
   $sid = [System.IO.Path]::GetFileNameWithoutExtension($main.Name)
   if ($Session -and $sid -ne $Session) { continue }
   $bad += Read-Transcript -Path $main.FullName -AgentType $MainAgent -MetaModel $null -MetaEffort $null `
-    -SessionId $sid -AgentFile $main.Name -Table $requests -SinceIso $sinceIso
+    -SessionId $sid -AgentFile $main.Name -IsSub $false -Table $requests -SinceIso $sinceIso
 
   $subDir = Join-Path $folder (Join-Path $sid 'subagents')
   if (Test-Path -LiteralPath $subDir -PathType Container) {
-    foreach ($sub in (Get-ChildItem -LiteralPath $subDir -Filter 'agent-*.jsonl' -File)) {
+    foreach ($sub in (Get-ChildItem -LiteralPath $subDir -Filter 'agent-*.jsonl' -File | Sort-Object Name)) {
       $meta = Read-Meta $sub.FullName
       $type = if ($meta -and $meta.agentType) { [string]$meta.agentType } else { 'unknown' }
       $mm = if ($meta -and $meta.model) { [string]$meta.model } else { $null }
       $me = if ($meta -and $meta.effort) { [string]$meta.effort } else { $null }
       $bad += Read-Transcript -Path $sub.FullName -AgentType $type -MetaModel $mm -MetaEffort $me `
-        -SessionId $sid -AgentFile $sub.Name -Table $requests -SinceIso $sinceIso
+        -SessionId $sid -AgentFile $sub.Name -IsSub $true -Table $requests -SinceIso $sinceIso
     }
   }
 }
@@ -244,6 +252,7 @@ foreach ($r in $requests.Values) {
   $p = Get-PriceFor $r.PriceModel $priceTable
   if (-not $p) { $p = Get-PriceFor $r.Model $priceTable }
   if ($p) {
+    if ($p.fallback) { [void]$fallbackModels.Add([string]$r.PriceModel) }
     $row.Cost += ($r.In * $p.input + $r.Out * $p.output + $r.C5 * $p.cache_write_5m + $r.C1 * $p.cache_write_1h + $r.CR * $p.cache_read) / 1e6
   } else {
     [void]$unknownModels.Add([string]$r.PriceModel)
@@ -271,27 +280,36 @@ $total = [Math]::Round((@($detail) | Measure-Object Cost -Sum).Sum, 6)
 
 # ---------- output ----------
 
+# Warnings come first so nobody reads the totals without them.
+$warnings = New-Object System.Collections.Generic.List[string]
+if ($bad -gt 0) { $warnings.Add("WARNING: $bad line(s) could not be parsed (for example lines over 2 MB) and are NOT counted: the totals are too low.") }
+if ($unknownModels.Count -gt 0) { $warnings.Add('WARNING: no price for model(s) ' + (($unknownModels | Sort-Object) -join ', ') + ' (cost counted as 0).') }
+if ($fallbackModels.Count -gt 0) { $warnings.Add('WARNING: model(s) ' + (($fallbackModels | Sort-Object) -join ', ') + ' have no exact price entry and are priced by their family fallback: verify prices.json in the agent-crew data folder.') }
+$warnings.Add("Costs are ESTIMATES from the agent-crew data folder prices.json (as of $($priceTable.as_of), status: $($priceTable.status)). Token counts are exact.")
+
 if ($Format -eq 'json') {
   [pscustomobject]@{
     project = $Project; transcriptFolder = $folder; requests = $requests.Count
+    estimated = $true
     totalCostUsd = $total; pricesAsOf = $priceTable.as_of; pricesStatus = $priceTable.status
-    unknownModels = @($unknownModels); unparsedLines = $bad
+    unknownModels = @($unknownModels); fallbackPricedModels = @($fallbackModels); unparsedLines = $bad
+    warnings = @($warnings)
     byAgent = $byAgent; rows = $detail
   } | ConvertTo-Json -Depth 6
   exit 0
 }
 
-$hAgent = @('Agent', 'Spawns', 'Input', 'CacheWrite', 'CacheRead', 'Output', 'Cost USD')
+$hAgent = @('Agent', 'Spawns', 'Input', 'CacheWrite', 'CacheRead', 'Output', 'Est. cost USD')
 $rAgent = @($false, $true, $true, $true, $true, $true, $true)
 $dataAgent = @($byAgent | ForEach-Object { , @($_.Agent, $_.Spawns, (Format-Num $_.Input), (Format-Num $_.CacheWrite), (Format-Num $_.CacheRead), (Format-Num $_.Output), (Format-Money $_.Cost)) })
-$hDetail = @('Agent', 'Model', 'Effort', 'Spawns', 'Input', 'CacheW 5m', 'CacheW 1h', 'CacheRead', 'Output', 'Cost USD')
+$hDetail = @('Agent', 'Model', 'Effort', 'Spawns', 'Input', 'CacheW 5m', 'CacheW 1h', 'CacheRead', 'Output', 'Est. cost USD')
 $rDetail = @($false, $false, $false, $true, $true, $true, $true, $true, $true, $true)
 $dataDetail = @($detail | ForEach-Object { , @($_.Agent, $_.Model, $_.Effort, $_.Spawns, (Format-Num $_.Input), (Format-Num $_.CacheWrite5m), (Format-Num $_.CacheWrite1h), (Format-Num $_.CacheRead), (Format-Num $_.Output), (Format-Money $_.Cost)) })
 
-$note = "Prices: data\prices.json, as of $($priceTable.as_of), status: $($priceTable.status)."
 $lines = New-Object System.Collections.Generic.List[string]
 if ($Format -eq 'md') {
-  $lines.Add("**Total: `$$(Format-Money $total)** over $($requests.Count) requests ($note)")
+  foreach ($w in $warnings) { $lines.Add("> $w"); $lines.Add('') }
+  $lines.Add("**Total (estimated): `$$(Format-Money $total)** over $($requests.Count) requests")
   $lines.Add('')
   $lines.Add('By agent type')
   $lines.Add('')
@@ -301,9 +319,10 @@ if ($Format -eq 'md') {
   $lines.Add('')
   $lines.AddRange([string[]](Format-MdTable $hDetail $dataDetail $rDetail))
 } else {
+  foreach ($w in $warnings) { $lines.Add($w) }
+  $lines.Add('')
   $lines.Add("Project:  $Project")
-  $lines.Add("Requests: $($requests.Count)   Total: `$$(Format-Money $total)")
-  $lines.Add($note)
+  $lines.Add("Requests: $($requests.Count)   Total (estimated): `$$(Format-Money $total)")
   $lines.Add('')
   $lines.Add('By agent type')
   $lines.AddRange([string[]](Format-TextTable $hAgent $dataAgent $rAgent))
@@ -311,6 +330,4 @@ if ($Format -eq 'md') {
   $lines.Add('By agent type, model and effort')
   $lines.AddRange([string[]](Format-TextTable $hDetail $dataDetail $rDetail))
 }
-if ($unknownModels.Count -gt 0) { $lines.Add(''); $lines.Add('No price for model(s) (cost counted as 0): ' + (($unknownModels | Sort-Object) -join ', ')) }
-if ($bad -gt 0) { $lines.Add(''); $lines.Add("$bad line(s) could not be parsed and were skipped.") }
 $lines | ForEach-Object { Write-Output $_ }

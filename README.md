@@ -53,10 +53,11 @@ macOS / Linux / Git Bash: `./install.sh` (best effort; flags `--claude-home DIR`
 `--no-settings` `--update` `--uninstall`; needs `python3` for the settings merge and
 PowerShell 7 `pwsh` to run the hooks). It is much less tested than the PowerShell installer.
 
-Then, in a project: start Claude Code with `claude --agent lead` (or let the bootstrap write
-`"agent": "lead"` into the project's `.claude/settings.local.json`). The lead finds no
+Then, in a project: start Claude Code with `claude --agent lead` (the bootstrap also proposes
+`"agent": "lead"` for the project's `.claude/settings.local.json`). The lead finds no
 `.claude/team/` and runs the `crew-bootstrap` skill: it reads your repo, asks about five
-questions, proposes a minimal roster and writes `.claude/team/`.
+questions, proposes a minimal roster, writes its own team files, and has the coder add `PROJECT.md`,
+the settings file and the `.gitignore` lines through a pull request.
 
 ### Update
 
@@ -92,15 +93,14 @@ Claude Code resolves an agent or skill of the same name in this order:
   the chat USER.md wins; on repository content PROJECT.md wins.
 
 Plugin install is **not supported**: `.claude-plugin/plugin.json` only exists so
-`claude plugin validate` can check the folder. The agents carry a `@@HOOK:...@@` token
-that the installer renders into the real hook path, and the hooks need the installed
-copy. Use the installers.
+`claude plugin validate` can check the folder. The hooks are registered in the user's
+settings.json by the installer and run from the installed copy. Use the installers.
 
 ## What lives in a project: `.claude/team/`
 
 | File | Purpose | Cap |
 |---|---|---|
-| `PROJECT.md` | front matter (`agent_crew_version`, `lead_writable`, `direct_to_main`, `report_only_agents`) + Context, Commands, Hazards, Conventions, Decision policy, Lead may run | |
+| `PROJECT.md` | written by the coder, never by the lead. Front matter (`agent_crew_version`, `lead_writable` (default empty), `direct_to_main`, `report_only_agents`) + Context, Commands, Hazards, Conventions, Decision policy, Lead may run | |
 | `routing.md` | model and effort per job, Evidence, Learned rules | 150 lines |
 | `roster.md` | active agents (why, evidence, trial/kept, uses, retire criterion), retired | 80 lines |
 | `state.md` | goal, open tasks, running agents, pending decisions, index. Not a log. | 50 lines |
@@ -119,20 +119,28 @@ fail open (a broken hook never blocks work). They read the hook JSON from stdin
 
 | Hook | Event | Does |
 |---|---|---|
-| `guard-paths` | PreToolUse `Edit\|Write\|MultiEdit\|NotebookEdit` | Lead may write only `.claude/team/**` (and `~/.claude/team/**`) plus the `lead_writable` globs. thinker, architect, reviewer (+ `ui-reviewer`, `security-reviewer`, `perf-profiler`, + `report_only_agents`) may write only `.claude/team/reports/**`. Others unrestricted. Blocks with exit 2 and a reason. |
+| `guard-paths` | PreToolUse `Edit\|Write\|MultiEdit\|NotebookEdit` | Lead may write only `.claude/team/**` (except `PROJECT.md`) and `~/.claude/team/**`, plus the `lead_writable` globs (never settings, hooks or PROJECT.md). thinker, architect, reviewer (+ `ui-reviewer`, `security-reviewer`, `perf-profiler`, + `report_only_agents`) may write only `.claude/team/reports/**`. Others unrestricted. Blocks with exit 2 and a reason. |
 | `check-caps` | PostToolUse, same matcher | Warns (never blocks) when state/routing/roster are over their cap. |
 | `pre-compact` | PreCompact | Copies `state.md` to `snapshots/`, keeps the newest 5. |
 | `post-compact` | PostCompact | Appends trigger and summary to `compact_log.md`, keeps the newest 20. |
 | `session-start` | SessionStart | After a compaction: prints `state.md` and says it is authoritative. On start/resume: asks for the retro when `.last-retro` is missing or over 7 days old or a file is over its cap; notes a version mismatch. |
 
-Limits you should know: `guard-paths` only sees the file-edit tools; the lead can still change
-files through Bash, so it is a guard rail, not a sandbox. The identity check relies on the hook
-input field `agent_type`.
+### Limits
 
-The hooks are registered in `~/.claude/settings.json` **and** listed in the `hooks:` front
-matter of `lead`, `thinker`, `architect` and `reviewer` (so `-NoSettings` still guards those).
-Both firing on the same call is harmless. Catalog agents carry no `hooks:` line (they are
-copied unrendered); the settings.json registration covers them.
+- `guard-paths` sees only the **file-edit tools** (Edit, Write, MultiEdit, NotebookEdit). The lead,
+  reviewer, security-reviewer and perf-profiler also have Bash or PowerShell, and a file written
+  through those is not seen. For the lead, writing files through Bash/PowerShell is forbidden by its
+  prompt, not by the hook: it is a guard rail against mistakes, not a sandbox.
+- The lead can never edit `PROJECT.md`, `.claude/settings*.json` or hook scripts with the edit tools,
+  even if `lead_writable` lists them (so it cannot widen its own rights or switch the guard off);
+  those changes go through the coder. Paths are resolved through junctions and symlinks first.
+- The identity check relies on the hook input field `agent_type`; without it the guard allows.
+- The guard is registered **once**, in `~/.claude/settings.json` (not in the agent files).
+  `install.ps1 -NoSettings` therefore means no guard at all.
+- Cost: every hook is a fresh `powershell.exe` start, about 350 ms each even when it does nothing
+  (measured on one Windows machine). An Edit or Write call pays for two (guard before, caps after),
+  about 0.7 s. The guard reads stdin and exits before loading anything when there is no
+  `agent_type`, but the process start itself cannot be avoided.
 
 ## Cost ledger
 
@@ -143,11 +151,19 @@ powershell -NoProfile -File ~\.claude\agent-crew\scripts\ledger.ps1 -Project . -
 Reads the project's transcripts under `~/.claude/projects/<slug>/` (main sessions and
 `<session>/subagents/agent-*.jsonl` with their `.meta.json`), removes streaming duplicates per
 request id, and sums input, cache write (5 min / 1 hour), cache read and output tokens per
-agent type, model and effort, with spawn counts and cost. `-Format table|json|md`. The slug is the
-project path with every non-alphanumeric character replaced by `-`.
+agent type, model and effort, with spawn counts and an **estimated** cost. `-Format table|json|md`.
+The slug is the project path with every non-alphanumeric character replaced by `-`; Claude Code
+shortens and hashes very long paths (over about 200 characters), which this does not handle.
 
-**Prices are a guess.** `data/prices.json` holds the best-known list prices of the 4.5-class
-models, marked `GUESS, verify`; the docs page could not be fetched when it was written. Check
+Honest limits: a request that appears in both a main and a subagent transcript is counted once and
+attributed to the subagent; transcript lines that PowerShell 5.1 cannot parse (for example over 2 MB)
+are NOT counted, and the output starts with a warning with their number; long-context and fast-mode
+price tiers are not modelled.
+
+**Prices are a guess.** `data/prices.json` holds best-known list prices per model id (the longest
+matching prefix wins, so older Opus ids are priced higher than the 4.5 class). A model id without an
+exact entry is priced by its family fallback and the ledger prints a warning naming it. The file is
+marked `GUESS, verify`; the docs page could not be fetched when it was written. Check
 <https://docs.claude.com/en/docs/about-claude/pricing> and fix the file before trusting a dollar
 figure. Token counts are exact.
 
@@ -172,8 +188,8 @@ stdin, and the installer against a temp folder (install twice, `-Update` with an
 
 ## Not verified yet
 
-- Which of the two guard registrations actually fires: the `hooks:` front matter of an agent, the
-  settings.json entry, or both. Both are installed so at least one should.
+- That the settings.json PreToolUse hook really blocks the lead's edit in a live session (the script
+  is tested by feeding it JSON; no live Claude Code session was used).
 - That `agent_type` is present in the hook input of the lead when it runs as the main session
   through the `agent` setting. The Claude Code binary documents it for `--agent` sessions and
   subagents; the guard does nothing if it is missing.
