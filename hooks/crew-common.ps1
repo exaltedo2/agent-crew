@@ -219,7 +219,14 @@ function Get-AgentName {
   return $name.Trim().ToLowerInvariant()
 }
 
-# ---- RAM guard config (used by hooks/ram-guard.ps1 and scripts/check-team.ps1) ----
+# ---- RAM guard config (used by hooks/ram-guard.ps1, scripts/check-team.ps1 and the installers) ----
+# Trust boundary: the shipped file and the user's file may do anything; the PROJECT file (which an agent can
+# edit) may only make things stricter: raise a threshold (up to the user's project_max_mb), add kinds, add
+# patterns and tools to a kind. Anything else in it is ignored with a warning.
+
+$script:RamRegexTimeoutMs = 200
+$script:RamCommandTools = @('Bash', 'PowerShell')
+$script:RamAgentTools = @('Agent', 'Task')
 
 function Get-RamGuardUserDir {
   # The user's Claude folder for ram-guard.json. AGENT_CREW_USER_DIR is a test hook.
@@ -233,18 +240,62 @@ function Test-IsNumber($Value) {
   return (($Value -is [int]) -or ($Value -is [long]) -or ($Value -is [double]) -or ($Value -is [decimal]))
 }
 
+function New-RamRegex([string]$Pattern) {
+  # Case-insensitive regex with a match timeout, so a pathological pattern cannot hang the hook.
+  return (New-Object System.Text.RegularExpressions.Regex($Pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase, [TimeSpan]::FromMilliseconds($script:RamRegexTimeoutMs)))
+}
+
+function New-RamConfig {
+  # project_max_mb: the most a project file may demand of one kind (a guess; the user file can change it).
+  return @{ enabled = $true; project_max_mb = 8000.0; kinds = [ordered]@{} }
+}
+
+function Get-RamKindTools {
+  # The tools a kind applies to. With patterns and no tools: the shell tools.
+  param($Kind)
+  $tools = @($Kind.tools)
+  if ($tools.Count -eq 0 -and @($Kind.patterns).Count -gt 0) { return @($script:RamCommandTools) }
+  return $tools
+}
+
+function Get-RamKindProblem {
+  # Why a merged kind cannot work (so the hook skips it), or $null when it is fine.
+  # Agent/Task: the kind matches every spawn (patterns do not apply to them). Bash/PowerShell: at least one
+  # valid pattern is needed, a shell kind without patterns never matches everything.
+  param($Kind)
+  if ($null -eq $Kind.min_free_mb) { return 'it needs min_free_mb' }
+  $tools = @(Get-RamKindTools $Kind)
+  if ($tools.Count -eq 0) { return 'it needs tools or patterns' }
+  $hasAgent = $false
+  $hasShell = $false
+  foreach ($t in $tools) {
+    if (@($script:RamAgentTools | Where-Object { $_ -ieq $t }).Count -gt 0) { $hasAgent = $true }
+    else { $hasShell = $true }
+  }
+  if ($hasShell -and -not $hasAgent -and @($Kind.patterns).Count -eq 0) { return 'a kind for shell commands needs at least one valid pattern' }
+  return $null
+}
+
 function Read-RamLayer {
-  # Reads one config file and merges it into $Config. Problems become warnings; they never throw.
+  # Reads one config file and merges it into $Config. Label: shipped | user | project. Problems become
+  # warnings; this never throws.
   param([hashtable]$Config, [string]$Path, [string]$Label, $Warnings)
   if (-not [System.IO.File]::Exists($Path)) { return }
+  $isProject = ($Label -eq 'project')
   $root = $null
   try { $root = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json }
   catch { $Warnings.Add("ram-guard: $Label config is not valid JSON, ignored ($Path)."); return }
   if ($root -isnot [System.Management.Automation.PSCustomObject]) { $Warnings.Add("ram-guard: $Label config must be a JSON object, ignored ($Path)."); return }
 
   if ($root.PSObject.Properties['enabled']) {
-    if ($root.enabled -is [bool]) { $Config.enabled = $root.enabled }
+    if ($isProject) { $Warnings.Add("ram-guard: the project config cannot change 'enabled' (only the user config can switch the guard off), ignored ($Path).") }
+    elseif ($root.enabled -is [bool]) { $Config.enabled = $root.enabled }
     else { $Warnings.Add("ram-guard: 'enabled' in the $Label config must be true or false, ignored ($Path).") }
+  }
+  if ($root.PSObject.Properties['project_max_mb']) {
+    if ($isProject) { $Warnings.Add("ram-guard: the project config cannot set 'project_max_mb' (only the user config can), ignored ($Path).") }
+    elseif ((Test-IsNumber $root.project_max_mb) -and ([double]$root.project_max_mb -gt 0)) { $Config.project_max_mb = [double]$root.project_max_mb }
+    else { $Warnings.Add("ram-guard: 'project_max_mb' in the $Label config must be a number above 0, ignored ($Path).") }
   }
   if (-not $root.PSObject.Properties['kinds'] -or $null -eq $root.kinds) { return }
   if ($root.kinds -isnot [System.Management.Automation.PSCustomObject]) { $Warnings.Add("ram-guard: 'kinds' in the $Label config must be an object, ignored ($Path)."); return }
@@ -253,16 +304,32 @@ function Read-RamLayer {
     $name = $prop.Name
     $entry = $prop.Value
     if ($entry -isnot [System.Management.Automation.PSCustomObject]) { $Warnings.Add("ram-guard: kind '$name' in the $Label config must be an object, skipped ($Path)."); continue }
-    if ($Config.kinds.Contains($name)) { $kind = $Config.kinds[$name] }
+    $exists = $Config.kinds.Contains($name)
+    if ($exists) { $kind = $Config.kinds[$name] }
     else { $kind = @{ enabled = $true; min_free_mb = $null; tools = @(); patterns = @() } }
 
     if ($entry.PSObject.Properties['enabled']) {
-      if ($entry.enabled -is [bool]) { $kind.enabled = $entry.enabled }
+      if ($isProject) { $Warnings.Add("ram-guard: kind '$name': the project config cannot switch a kind on or off, ignored.") }
+      elseif ($entry.enabled -is [bool]) { $kind.enabled = $entry.enabled }
       else { $Warnings.Add("ram-guard: kind '$name': 'enabled' must be true or false, ignored ($Label config).") }
     }
     if ($entry.PSObject.Properties['min_free_mb']) {
-      if ((Test-IsNumber $entry.min_free_mb) -and ([double]$entry.min_free_mb -gt 0)) { $kind.min_free_mb = [double]$entry.min_free_mb }
-      else { $Warnings.Add("ram-guard: kind '$name': 'min_free_mb' must be a number above 0, ignored ($Label config).") }
+      if (-not ((Test-IsNumber $entry.min_free_mb) -and ([double]$entry.min_free_mb -gt 0))) {
+        $Warnings.Add("ram-guard: kind '$name': 'min_free_mb' must be a number above 0, ignored ($Label config).")
+      } else {
+        $mb = [double]$entry.min_free_mb
+        if ($isProject) {
+          if ($mb -gt $Config.project_max_mb) {
+            $Warnings.Add("ram-guard: kind '$name': the project asked for $([int]$mb) MB, lowered to the user's project_max_mb of $([int]$Config.project_max_mb) MB.")
+            $mb = $Config.project_max_mb
+          }
+          if ($null -ne $kind.min_free_mb -and $mb -lt $kind.min_free_mb) {
+            $Warnings.Add("ram-guard: kind '$name': the project config can only raise min_free_mb (now $([int]$kind.min_free_mb) MB), $([int]$mb) MB ignored.")
+            $mb = $kind.min_free_mb
+          }
+        }
+        $kind.min_free_mb = $mb
+      }
     }
     if ($entry.PSObject.Properties['tools']) {
       $list = @($entry.tools)
@@ -272,18 +339,55 @@ function Read-RamLayer {
         if (($t -isnot [string]) -or [string]::IsNullOrWhiteSpace($t)) { $badTools = $true; break }
         $names += $t.Trim()
       }
-      if (-not $badTools) { $kind.tools = $names }
-      else { $Warnings.Add("ram-guard: kind '$name': 'tools' must be a list of tool names, ignored ($Label config).") }
+      if ($badTools) { $Warnings.Add("ram-guard: kind '$name': 'tools' must be a list of tool names, ignored ($Label config).") }
+      elseif ($isProject) {
+        # A project may widen a kind, never narrow it.
+        $merged = @(Get-RamKindTools $kind)
+        foreach ($t in $names) { if (@($merged | Where-Object { $_ -ieq $t }).Count -eq 0) { $merged += $t } }
+        $kind.tools = $merged
+      } else { $kind.tools = $names }
     }
     if ($entry.PSObject.Properties['patterns']) {
       $good = @()
       foreach ($pat in @($entry.patterns)) {
         if (($pat -isnot [string]) -or [string]::IsNullOrWhiteSpace($pat)) { $Warnings.Add("ram-guard: kind '$name': a pattern must be a non-empty string, skipped ($Label config)."); continue }
-        try { [void][regex]::IsMatch('', $pat); $good += $pat }
+        try { [void](New-RamRegex $pat); $good += $pat }
         catch { $Warnings.Add("ram-guard: kind '$name': pattern '$pat' is not a valid regular expression, skipped ($Label config).") }
       }
-      $kind.patterns = $good
+      if ($isProject) {
+        # A project adds patterns to a kind; it never replaces the ones it inherited.
+        $merged = @($kind.patterns)
+        foreach ($pat in $good) { if ($merged -notcontains $pat) { $merged += $pat } }
+        $kind.patterns = $merged
+      } else { $kind.patterns = $good }
     }
     $Config.kinds[$name] = $kind
   }
+}
+
+function Get-RamHookIfRules {
+  # Permission-rule filters for the Bash and PowerShell hook entries, from the `hook_if` command globs of the
+  # kinds in the shipped and the user file (e.g. "claude *" -> "Bash(claude *)"). Returns an object with
+  # All = $true when the entries must be unconditional (the user file sets "scan_all_commands": true, or a
+  # shell kind has patterns but no hook_if), else Globs = the command globs.
+  param([string[]]$Files)
+  $globs = New-Object System.Collections.Generic.List[string]
+  foreach ($file in $Files) {
+    if (-not [System.IO.File]::Exists($file)) { continue }
+    try { $root = [System.IO.File]::ReadAllText($file) | ConvertFrom-Json } catch { continue }
+    if ($root -isnot [System.Management.Automation.PSCustomObject]) { continue }
+    if ($root.PSObject.Properties['scan_all_commands'] -and $root.scan_all_commands -eq $true) { return [pscustomobject]@{ All = $true; Globs = @() } }
+    if (-not $root.PSObject.Properties['kinds'] -or $root.kinds -isnot [System.Management.Automation.PSCustomObject]) { continue }
+    foreach ($prop in $root.kinds.PSObject.Properties) {
+      $e = $prop.Value
+      if ($e -isnot [System.Management.Automation.PSCustomObject]) { continue }
+      if ($e.PSObject.Properties['enabled'] -and $e.enabled -eq $false) { continue }
+      $hasPatterns = ($e.PSObject.Properties['patterns'] -and @($e.patterns).Count -gt 0)
+      if (-not $hasPatterns) { continue }
+      $hasIf = ($e.PSObject.Properties['hook_if'] -and @($e.hook_if).Count -gt 0)
+      if (-not $hasIf) { return [pscustomobject]@{ All = $true; Globs = @() } }
+      foreach ($g in @($e.hook_if)) { if (($g -is [string]) -and $g.Trim() -and -not $globs.Contains($g.Trim())) { $globs.Add($g.Trim()) } }
+    }
+  }
+  return [pscustomobject]@{ All = $false; Globs = @($globs) }
 }

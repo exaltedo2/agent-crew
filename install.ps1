@@ -9,7 +9,9 @@
   - hooks, scripts, data, templates, catalog, docs\RULES.md, VERSION
                     -> <ClaudeHome>\agent-crew\   (the hooks run from here)
   - templates\USER.md -> <ClaudeHome>\team\USER.md  (only if it does not exist yet)
-  - hook entries    -> merged into <ClaudeHome>\settings.json (backup first, idempotent)
+  - hook entries    -> merged into <ClaudeHome>\settings.json (backup first, idempotent). The ram-guard entries
+                       for Bash/PowerShell carry an `if` filter built from the ram-guard.json files: re-run the
+                       installer after you change `hook_if` or add a shell kind to your own ram-guard.json.
   What was installed, with a hash of each file, is recorded in <ClaudeHome>\agent-crew\installed.json.
 
   Re-running is safe. A file that differs from this version is only replaced with -Update, and
@@ -38,14 +40,30 @@ $RecordPath = Join-Path $CrewDir 'installed.json'
 $SettingsPath = Join-Path $ClaudeHome 'settings.json'
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 
-# event -> list of @{ matcher; script }
+. (Join-Path $Source 'hooks\crew-common.ps1')
+
+# event -> list of @{ Event; Matcher; Script; If }. `If` is a permission-rule filter (Claude Code starts the
+# hook only for tool calls that match it); the ram-guard Bash/PowerShell entries get one per command glob
+# (`hook_if`) of the kinds in the shipped and the user ram-guard.json, so an ordinary command does not start
+# a PowerShell process at all. A user kind with patterns and no hook_if, or "scan_all_commands": true in the
+# user file, gives one unconditional Bash|PowerShell entry instead (slower).
 $HookPlan = @(
-  @{ Event = 'PreToolUse';   Matcher = 'Edit|Write|MultiEdit|NotebookEdit'; Script = 'guard-paths' },
-  @{ Event = 'PreToolUse';   Matcher = 'Agent|Task|Bash|PowerShell'; Script = 'ram-guard' },
-  @{ Event = 'PostToolUse';  Matcher = 'Edit|Write|MultiEdit|NotebookEdit'; Script = 'check-caps' },
-  @{ Event = 'PreCompact';   Matcher = $null; Script = 'pre-compact' },
-  @{ Event = 'PostCompact';  Matcher = $null; Script = 'post-compact' },
-  @{ Event = 'SessionStart'; Matcher = $null; Script = 'session-start' }
+  @{ Event = 'PreToolUse';   Matcher = 'Edit|Write|MultiEdit|NotebookEdit'; Script = 'guard-paths'; If = $null },
+  @{ Event = 'PreToolUse';   Matcher = 'Agent|Task'; Script = 'ram-guard'; If = $null }
+)
+$ramIf = Get-RamHookIfRules @((Join-Path (Join-Path $Source 'data') 'ram-guard.json'), (Join-Path (Join-Path $ClaudeHome 'team') 'ram-guard.json'))
+if ($ramIf.All) {
+  $HookPlan += @{ Event = 'PreToolUse'; Matcher = 'Bash|PowerShell'; Script = 'ram-guard'; If = $null }
+} else {
+  foreach ($tool in 'Bash', 'PowerShell') {
+    foreach ($glob in $ramIf.Globs) { $HookPlan += @{ Event = 'PreToolUse'; Matcher = $tool; Script = 'ram-guard'; If = "$tool($glob)" } }
+  }
+}
+$HookPlan += @(
+  @{ Event = 'PostToolUse';  Matcher = 'Edit|Write|MultiEdit|NotebookEdit'; Script = 'check-caps'; If = $null },
+  @{ Event = 'PreCompact';   Matcher = $null; Script = 'pre-compact'; If = $null },
+  @{ Event = 'PostCompact';  Matcher = $null; Script = 'post-compact'; If = $null },
+  @{ Event = 'SessionStart'; Matcher = $null; Script = 'session-start'; If = $null }
 )
 
 # ---------- helpers ----------
@@ -193,7 +211,8 @@ function Test-HooksCurrent($Settings) {
     foreach ($group in (Get-EventGroups $Settings $p.Event)) {
       $groupMatcher = if ($group.PSObject.Properties['matcher']) { [string]$group.matcher } else { $null }
       foreach ($h in @($group.hooks)) {
-        if ([string]$h.command -eq $cmd -and $groupMatcher -eq $p.Matcher) { $found++ }
+        $hookIf = if ($h.PSObject.Properties['if']) { [string]$h.if } else { '' }
+        if ([string]$h.command -eq $cmd -and $groupMatcher -eq $p.Matcher -and $hookIf -eq [string]$p.If) { $found++ }
       }
     }
     if ($found -ne 1) { return $false }
@@ -209,7 +228,9 @@ function Install-Hooks {
   foreach ($p in $HookPlan) {
     $entry = [ordered]@{}
     if ($p.Matcher) { $entry['matcher'] = $p.Matcher }
-    $entry['hooks'] = @([pscustomobject]@{ type = 'command'; command = (Get-HookCommand $p.Script) })
+    $hookObj = [ordered]@{ type = 'command'; command = (Get-HookCommand $p.Script) }
+    if ($p.If) { $hookObj['if'] = $p.If }
+    $entry['hooks'] = @([pscustomobject]$hookObj)
     $groups = @(Get-EventGroups $settings $p.Event) + @([pscustomobject]$entry)
     if ($settings.hooks.PSObject.Properties[$p.Event]) { $settings.hooks.$($p.Event) = $groups }
     else { $settings.hooks | Add-Member -NotePropertyName $p.Event -NotePropertyValue $groups }

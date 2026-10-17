@@ -5,12 +5,13 @@
   below the threshold of that kind of job. Block = exit code 2 with the reason on stderr.
   It never kills or stops anything that already runs.
 
-  Thresholds (kinds of jobs, patterns, MB) come from three JSON files, merged in this order,
-  a later one replacing a kind of the same name field by field:
+  Thresholds (kinds of jobs, patterns, MB) come from three JSON files, merged in this order:
     1. <agent-crew>/data/ram-guard.json        shipped defaults (guesses)
-    2. <claude home>/team/ram-guard.json       the user's override (CLAUDE_CONFIG_DIR or ~/.claude)
-    3. <project>/.claude/team/ram-guard.json   project-specific heavy commands
-  `"enabled": false` at the top level switches the guard off.
+    2. <claude home>/team/ram-guard.json       the user's override (CLAUDE_CONFIG_DIR or ~/.claude); may change anything
+    3. <project>/.claude/team/ram-guard.json   project-specific heavy commands; may only make things stricter
+  The user file replaces a kind of the same name field by field; the project file may add kinds, patterns
+  and tools and raise a threshold (up to the user's project_max_mb), nothing else (it is ignored with a warning).
+  `"enabled": false` at the top level of the user file switches the guard off.
 
   Fails open: a malformed config file or entry is skipped with a warning (the lower layers
   still apply), unreadable memory allows the call with a warning. Warnings reach Claude as
@@ -107,8 +108,8 @@ try {
   $command = ''
   if ($in.tool_input -and $in.tool_input.PSObject.Properties['command'] -and $in.tool_input.command) { $command = [string]$in.tool_input.command }
 
-  # Layers: plugin defaults < user < project.
-  $config = @{ enabled = $true; kinds = [ordered]@{} }
+  # Layers: plugin defaults < user < project (the project may only make things stricter, see crew-common.ps1).
+  $config = New-RamConfig
   $pluginFile = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) 'data') 'ram-guard.json'
   if (-not [System.IO.File]::Exists($pluginFile)) { Add-RamWarning "ram-guard: the shipped defaults file is missing ($pluginFile), nothing is guarded." }
   Read-RamLayer $config $pluginFile 'shipped' $script:RamWarnings
@@ -121,22 +122,31 @@ try {
 
   if (-not $config.enabled) { exit 0 }
 
-  # Which kinds does this call belong to?
+  # Which kinds does this call belong to? An Agent/Task call matches every enabled kind that lists the tool
+  # (patterns do not apply to it). A shell call needs the tool listed and one of the patterns to match.
   $matched = @()
+  $isAgentCall = (@($script:RamAgentTools | Where-Object { $_ -ieq $tool }).Count -gt 0)
   foreach ($name in $config.kinds.Keys) {
     $kind = $config.kinds[$name]
     if (-not $kind.enabled) { continue }
-    $tools = @($kind.tools)
-    if ($tools.Count -eq 0 -and @($kind.patterns).Count -gt 0) { $tools = @('Bash', 'PowerShell') }
-    if ($tools.Count -eq 0 -or $null -eq $kind.min_free_mb) {
-      Add-RamWarning "ram-guard: kind '$name' needs min_free_mb and either tools or patterns, skipped."
-      continue
-    }
+    $problem = Get-RamKindProblem $kind
+    if ($problem) { Add-RamWarning "ram-guard: kind '$name' skipped: $problem."; continue }
+    $tools = @(Get-RamKindTools $kind)
     if (@($tools | Where-Object { $_ -ieq $tool }).Count -eq 0) { continue }
-    $patterns = @($kind.patterns)
-    $hit = ($patterns.Count -eq 0)
-    foreach ($pat in $patterns) {
-      if ($command -and [regex]::IsMatch($command, $pat, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { $hit = $true; break }
+    $hit = $isAgentCall
+    if (-not $isAgentCall -and $command) {
+      foreach ($pat in @($kind.patterns)) {
+        try {
+          if ((New-RamRegex $pat).IsMatch($command)) { $hit = $true; break }
+        } catch {
+          $ex = $_.Exception
+          if (($ex -is [System.Text.RegularExpressions.RegexMatchTimeoutException]) -or ($ex.InnerException -is [System.Text.RegularExpressions.RegexMatchTimeoutException])) {
+            Add-RamWarning "ram-guard: kind '$name': pattern '$pat' took over $($script:RamRegexTimeoutMs) ms on a command and was skipped."
+          } else {
+            Add-RamWarning "ram-guard: kind '$name': pattern '$pat' could not be used and was skipped."
+          }
+        }
+      }
     }
     if ($hit) { $matched += [pscustomobject]@{ Name = $name; Need = [double]$kind.min_free_mb } }
   }

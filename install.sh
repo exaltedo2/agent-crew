@@ -65,14 +65,36 @@ rec_save() {
 # ---- settings.json merge (python)
 settings_edit() { # $1 = install | uninstall
   [ -n "$PY" ] || { echo "  python not found: settings.json not changed" >&2; return 0; }
-  CREW_DIR="$CREW" SETTINGS_PATH="$SETTINGS" MODE="$1" "$PY" - <<'PYEOF'
+  CREW_DIR="$CREW" SETTINGS_PATH="$SETTINGS" SRC_DIR="$SRC" MODE="$1" "$PY" - <<'PYEOF'
 import json, os, re, shutil, sys, time
 crew, path, mode = os.environ["CREW_DIR"], os.environ["SETTINGS_PATH"], os.environ["MODE"]
-plan = [("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", "guard-paths"),
-        ("PreToolUse", "Agent|Task|Bash|PowerShell", "ram-guard"),
-        ("PostToolUse", "Edit|Write|MultiEdit|NotebookEdit", "check-caps"),
-        ("PreCompact", None, "pre-compact"), ("PostCompact", None, "post-compact"),
-        ("SessionStart", None, "session-start")]
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as f: return json.load(f)
+    except (OSError, ValueError): return None
+# ram-guard Bash/PowerShell entries get an `if` filter from the `hook_if` globs of the shipped and the user
+# ram-guard.json (same rules as Get-RamHookIfRules in hooks/crew-common.ps1); unconditional when needed.
+globs, scan_all = [], False
+for f in (os.path.join(os.environ["SRC_DIR"], "data", "ram-guard.json"), os.path.join(os.path.dirname(path), "team", "ram-guard.json")):
+    doc = load(f)
+    if not isinstance(doc, dict): continue
+    if doc.get("scan_all_commands") is True: scan_all = True
+    kinds = doc.get("kinds")
+    if not isinstance(kinds, dict): continue
+    for kind in kinds.values():
+        if not isinstance(kind, dict) or kind.get("enabled") is False or not kind.get("patterns"): continue
+        if not kind.get("hook_if"): scan_all = True
+        for g in kind.get("hook_if") or []:
+            if isinstance(g, str) and g.strip() and g.strip() not in globs: globs.append(g.strip())
+plan = [("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", "guard-paths", None),
+        ("PreToolUse", "Agent|Task", "ram-guard", None)]
+if scan_all: plan.append(("PreToolUse", "Bash|PowerShell", "ram-guard", None))
+else:
+    for tool in ("Bash", "PowerShell"):
+        for g in globs: plan.append(("PreToolUse", tool, "ram-guard", "%s(%s)" % (tool, g)))
+plan += [("PostToolUse", "Edit|Write|MultiEdit|NotebookEdit", "check-caps", None),
+         ("PreCompact", None, "pre-compact", None), ("PostCompact", None, "post-compact", None),
+         ("SessionStart", None, "session-start", None)]
 def cmd(s): return 'pwsh -NoProfile -ExecutionPolicy Bypass -File "%s/hooks/%s.ps1"' % (crew, s)
 ours_cmds = set(cmd(p[2]) for p in plan)
 class Ours:
@@ -96,8 +118,9 @@ for event in list(hooks):
     if kept: hooks[event] = kept
     else: del hooks[event]
 if mode == "install":
-    for event, matcher, script in plan:
+    for event, matcher, script, cond in plan:
         group = {"hooks": [{"type": "command", "command": cmd(script)}]}
+        if cond: group["hooks"][0]["if"] = cond
         if matcher: group = dict([("matcher", matcher)] + list(group.items()))
         hooks.setdefault(event, []).append(group)
 if hooks: data["hooks"] = hooks
