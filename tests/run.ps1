@@ -271,6 +271,37 @@ try {
   Check 'guard: a wide lead_writable allows ordinary files' ((Guard 'lead' "$widePj/src/a.txt" $wide).Exit -eq 0)
   Check 'guard: ... but not PROJECT.md, settings or hooks' (((Guard 'lead' "$widePj/.claude/team/PROJECT.md" $wide).Exit -eq 2) -and ((Guard 'lead' "$widePj/.claude/settings.local.json" $wide).Exit -eq 2) -and ((Guard 'lead' "$widePj/.claude/hooks/a.ps1" $wide).Exit -eq 2))
 
+  # USER.md lead_writable: personal files outside the project, hermetic fake home (never the real ~/.claude).
+  # Outside $Work: that lives inside this git repository, where the lead is never allowed.
+  $guardTmp = Join-Path ([System.IO.Path]::GetTempPath()) ('crew-guard-' + [guid]::NewGuid().ToString('N'))
+  $fakeHome = Join-Path $guardTmp 'fakehome'
+  New-Item -ItemType Directory -Force -Path (Join-Path $fakeHome '.claude\team'), (Join-Path $fakeHome '.claude\notes'), (Join-Path $fakeHome '.claude\agents'), (Join-Path $guardTmp 'gitrepo\.git'), (Join-Path $guardTmp 'plain') | Out-Null
+  $gitLn = (ConvertTo-Slash (Join-Path $guardTmp 'gitrepo'))
+  $plainLn = (ConvertTo-Slash (Join-Path $guardTmp 'plain'))
+  Set-Content -LiteralPath (Join-Path $fakeHome '.claude\team\USER.md') -Value "---`nlead_writable:`n  - '~/.claude/notes/**'`n  - '~/.claude/agents/**'`n  - '~/.claude/settings*.json'`n  - '$gitLn/**'`n  - '$plainLn/**'`n---`n"
+  $saved = @{ H = $env:HOME; U = $env:USERPROFILE; C = $env:CLAUDE_CONFIG_DIR }
+  $env:HOME = $fakeHome; $env:USERPROFILE = $fakeHome; $env:CLAUDE_CONFIG_DIR = $null
+  $fh = ConvertTo-Slash $fakeHome
+  try {
+    Check 'guard: lead may write a ~-relative USER.md lead_writable file' ((Guard 'lead' "$fh/.claude/notes/me.md").Exit -eq 0)
+    Check 'guard: ... also with other case and backslashes' ((Guard 'lead' ($fakeHome.ToUpper() + '\.CLAUDE\Notes\x.md')).Exit -eq 0)
+    Check 'guard: ... an absolute listed folder works' ((Guard 'lead' "$plainLn/a.txt").Exit -eq 0)
+    Check 'guard: ... unlisted files outside stay blocked' ((Guard 'lead' "$fh/.claude/other.md").Exit -eq 2)
+    Check 'guard: USER.md list never allows agent files or settings' (((Guard 'lead' "$fh/.claude/agents/x.md").Exit -eq 2) -and ((Guard 'lead' "$fh/.claude/settings.json").Exit -eq 2))
+    Check 'guard: USER.md list never allows a git repository' ((Guard 'lead' "$gitLn/a.txt").Exit -eq 2)
+    Check 'guard: USER.md list does not widen a report-only agent' ((Guard 'thinker' "$fh/.claude/notes/me.md").Exit -eq 2)
+    Check 'guard: USER.md list does not apply inside the project' ((Guard 'lead' "$pj/src/a.txt").Exit -eq 2)
+  } finally {
+    $env:HOME = $saved.H; $env:USERPROFILE = $saved.U; $env:CLAUDE_CONFIG_DIR = $saved.C
+  }
+  $uh = Join-Path $guardTmp 'uservalid'
+  New-Item -ItemType Directory -Force -Path (Join-Path $uh 'team') | Out-Null
+  $uu = ''
+  Set-Content -LiteralPath (Join-Path $uh 'team\USER.md') -Value ("---`nlead_writable:`n  - '~/.claude/notes/**'`n  - '~/.claude/settings.json'`n  - '$gitLn/**'`n  - 'relative/x'`n---`n" + $uu)
+  $r = Invoke-Check @('-Project', $ok, '-ClaudeHome', $uh)
+  Check 'check-team: warns about forbidden USER.md lead_writable entries' (($r.Out -match "WARN: USER.md lead_writable '~/.claude/settings.json'") -and ($r.Out -match "WARN: USER.md lead_writable '.*gitrepo/\*\*' is inside a git") -and ($r.Out -match "WARN: USER.md lead_writable 'relative/x'") -and ($r.Out -notmatch "WARN: USER.md lead_writable '~/.claude/notes")) $r.Out
+  Remove-Item -Recurse -Force -LiteralPath $guardTmp -ErrorAction SilentlyContinue
+
   # Junctions: a link inside an allowed folder must not lead outside it.
   $outside = Join-Path $Work 'outside'
   New-Item -ItemType Directory -Path $outside | Out-Null
@@ -358,9 +389,9 @@ try {
   Check 'session-start resume: old marker asks for the retro' ($r.Out -match 'crew-retro' -and $r.Out -match '10 days')
   Set-Content -LiteralPath $marker -Value (Get-Date).ToString('o')
   $proj2 = Join-Path $proj '.claude/team/PROJECT.md'
-  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.3.0', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
+  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.3.1', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
   $r = Start-Hook 'startup'
-  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0.3.0')
+  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0.3.1')
   $r = Start-Hook 'startup' (ConvertTo-Slash $Work)
   Check 'session-start without .claude/team is silent' ($r.Out.Trim() -eq '')
 

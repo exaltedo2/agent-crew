@@ -45,6 +45,48 @@ function Get-UserClaudeDirs {
   return @($dirs | ForEach-Object { $_.TrimEnd([char]92, [char]47).ToLowerInvariant() })
 }
 
+function Get-UserLeadWritable {
+  # The optional `lead_writable` list in the front matter of <user .claude>/team/USER.md, as slash globs
+  # with `~` expanded to the home folder. Entries are returned as written otherwise (absolute or ~-relative).
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($userDir in (Get-UserClaudeDirs)) {
+    $user = Get-FrontMatter (Join-Path $userDir 'team/USER.md')
+    foreach ($g in @($user['lead_writable'])) {
+      if ([string]::IsNullOrWhiteSpace($g)) { continue }
+      $t = (ConvertTo-SlashPath $g.Trim())
+      if ($t -eq '~' -or $t.StartsWith('~/')) { $t = (ConvertTo-SlashPath $HOME).TrimEnd('/') + $t.Substring(1) }
+      $out.Add($t)
+    }
+  }
+  return @($out)
+}
+
+function Test-UserLeadForbidden {
+  # True for a path the lead may never write through a user lead_writable glob (given as a slash path):
+  # settings*.json, hook folders, agent files, PROJECT.md, and anything inside a git repository.
+  param([string]$FullPath)
+  $p = ConvertTo-SlashPath $FullPath
+  if ($p -match '(?i)(^|/)settings[^/]*\.json$') { return $true }
+  if ($p -match '(?i)(^|/)(hooks|agents)/') { return $true }
+  if ($p -match '(?i)(^|/)PROJECT\.md$') { return $true }
+  $dir = Split-Path -Parent $FullPath
+  while ($dir) {
+    if ([System.IO.Directory]::Exists((Join-Path $dir '.git')) -or [System.IO.File]::Exists((Join-Path $dir '.git'))) { return $true }
+    $parent = Split-Path -Parent $dir
+    if ([string]::IsNullOrEmpty($parent) -or $parent -eq $dir) { break }
+    $dir = $parent
+  }
+  return $false
+}
+
+function Test-UserLeadWritable {
+  param([string]$FullPath)
+  $globs = @(Get-UserLeadWritable)
+  if ($globs.Count -eq 0) { return $false }
+  if (Test-UserLeadForbidden $FullPath) { return $false }
+  return (Test-GlobMatch -RelPath ((ConvertTo-SlashPath $FullPath).TrimStart('/')) -Globs $globs)
+}
+
 function Resolve-RealPath {
   # Absolute path with junctions / symlinks resolved in every component (also parent folders), so a
   # link inside an allowed folder cannot lead outside it. Components that do not exist are kept as they are.

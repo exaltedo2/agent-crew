@@ -157,7 +157,7 @@ fail open (a broken hook never blocks work). They read the hook JSON from stdin
 
 | Hook | Event | Does |
 |---|---|---|
-| `guard-paths` | PreToolUse `Edit\|Write\|MultiEdit\|NotebookEdit` | Lead may write only `.claude/team/**` (except `PROJECT.md`) and `~/.claude/team/**`, plus the `lead_writable` globs (never settings, hooks or PROJECT.md). thinker, architect, reviewer (+ `ui-reviewer`, `security-reviewer`, `perf-profiler`, + `report_only_agents`) may write only `.claude/team/reports/**`. Others unrestricted. Blocks with exit 2 and a reason. |
+| `guard-paths` | PreToolUse `Edit\|Write\|MultiEdit\|NotebookEdit` | Lead may write only `.claude/team/**` (except `PROJECT.md`) and `~/.claude/team/**`, plus the `lead_writable` globs (never settings, hooks or PROJECT.md) and, outside the project, the optional `lead_writable` list in `~/.claude/team/USER.md` (absolute or `~`-relative globs, e.g. `~/.claude/notes/**`; never settings*.json, hooks, agent files, PROJECT.md or anything inside a git repository). thinker, architect, reviewer (+ `ui-reviewer`, `security-reviewer`, `perf-profiler`, + `report_only_agents`) may write only `.claude/team/reports/**`. Others unrestricted. Blocks with exit 2 and a reason. |
 | `ram-guard` | PreToolUse `Agent\|Task`, and `Bash` / `PowerShell` with an `if` filter such as `Bash(claude *)` | Blocks starting new heavy work (a subagent, or a command matching a configured pattern) while free memory is below that job kind's threshold. Exit 2 and a reason; never kills anything. See [RAM guard](#ram-guard). |
 | `check-caps` | PostToolUse, same matcher | Warns (never blocks) when state/routing/roster are over their cap. |
 | `pre-compact` | PreCompact | Copies `state.md` to `snapshots/`, keeps the newest 5. |
@@ -172,7 +172,8 @@ fail open (a broken hook never blocks work). They read the hook JSON from stdin
   prompt, not by the hook: it is a guard rail against mistakes, not a sandbox.
 - The lead can never edit `PROJECT.md`, `.claude/settings*.json` or hook scripts with the edit tools,
   even if `lead_writable` lists them (so it cannot widen its own rights or switch the guard off);
-  those changes go through the coder. Paths are resolved through junctions and symlinks first.
+  those changes go through the coder. The same holds for the USER.md list, which also never reaches into a git
+  repository (code changes stay on the PR path); `check-team` warns about such entries. Paths are resolved through junctions and symlinks first.
 - The identity check relies on the hook input field `agent_type`; without it the guard allows.
 - The guard is registered **once**, in `~/.claude/settings.json` (not in the agent files).
   `install.ps1 -NoSettings` therefore means no guard at all.
