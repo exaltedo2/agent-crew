@@ -8,7 +8,8 @@
   <ClaudeHome>/agents); at most 7 active agents; every such agent file has a one-line
   `description:` in its front matter; the `lead` agent, if it has a `tools:` list, includes
   `Skill` (without it the lead cannot run crew-bootstrap, crew-retro, crew-hire, crew-retire).
-  Warns (never fails) when a routing.md row names a model that is missing from the "Available
+  Validates ram-guard.json in the project's .claude/team (a problem) and in <ClaudeHome>/team (a warning)
+  when they exist. Warns (never fails) when a routing.md row names a model that is missing from the "Available
   models" list of <ClaudeHome>\team\USER.md and has no Fallback. Model names are free-form:
   unknown names are never rejected.
 
@@ -141,6 +142,27 @@ if ((Test-Path -LiteralPath $userPath -PathType Leaf) -and (Test-Path -LiteralPa
     }
   }
 }
+
+# RAM guard config files (hooks/ram-guard.ps1 fails open on a bad file, so a mistake would go unnoticed).
+# A bad project file is a problem (it is committed with the project); a bad user or shipped file is a warning.
+$ramConfig = New-RamConfig
+$ramShipped = New-Object System.Collections.Generic.List[string]
+$ramUser = New-Object System.Collections.Generic.List[string]
+$ramProject = New-Object System.Collections.Generic.List[string]
+Read-RamLayer $ramConfig (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) 'data') 'ram-guard.json') 'shipped' $ramShipped
+$ramUserFile = Join-Path (Join-Path $ClaudeHome 'team') 'ram-guard.json'
+$ramProjectFile = Join-Path $team 'ram-guard.json'
+Read-RamLayer $ramConfig $ramUserFile 'user' $ramUser
+Read-RamLayer $ramConfig $ramProjectFile 'project' $ramProject
+if ((Test-Path -LiteralPath $ramUserFile -PathType Leaf) -or (Test-Path -LiteralPath $ramProjectFile -PathType Leaf)) {
+  foreach ($name in $ramConfig.kinds.Keys) {
+    $why = Get-RamKindProblem $ramConfig.kinds[$name]
+    if ($why) { $ramUser.Add("ram-guard: kind '$name' is skipped by the hook: $why.") }
+  }
+}
+foreach ($w in $ramShipped) { $warnings.Add($w) }
+foreach ($w in $ramUser) { $warnings.Add($w) }
+foreach ($w in $ramProject) { $problems.Add($w) }
 
 foreach ($w in $warnings) { Write-Output "WARN: $w" }
 if ($problems.Count -eq 0) {

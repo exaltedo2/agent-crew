@@ -1,5 +1,5 @@
 ---
-agent_crew_version: 0.2.1
+agent_crew_version: 0.3.0
 # Extra globs (relative to the repo root) the lead may edit itself, besides .claude/team/**.
 # Never effective for this file, .claude/settings*.json or hook scripts: those go through the coder.
 lead_writable: []
