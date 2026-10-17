@@ -106,16 +106,60 @@ function Get-PriceFor([string]$ModelId, $PriceTable) {
   return @{ Price = $PriceTable.default; Known = $false }
 }
 
-function Merge-LocalPrices($Base, [string]$LocalPath) {
+function Test-PriceEntry($Entry, [string]$Kind) {
+  # An entry must carry the five prices as real numbers (a missing one would silently price at 0);
+  # a family needs a non-empty "match" list, an override a non-empty "prefixes" list.
+  if ($null -eq $Entry -or $Entry -isnot [pscustomobject]) { return "$Kind is not an object" }
+  foreach ($f in 'input', 'output', 'cache_write_5m', 'cache_write_1h', 'cache_read') {
+    $v = $Entry.$f
+    if ($null -eq $v -or ($v -isnot [double] -and $v -isnot [int] -and $v -isnot [long] -and $v -isnot [decimal])) { return "$Kind has no numeric '$f'" }
+  }
+  if ($Kind -like 'family*') {
+    $m = @($Entry.match | Where-Object { $_ -is [string] -and $_.Trim() })
+    if ($m.Count -eq 0) { return "$Kind has no non-empty 'match' list" }
+  }
+  if ($Kind -like 'override*') {
+    $m = @($Entry.prefixes | Where-Object { $_ -is [string] -and $_.Trim() })
+    if ($m.Count -eq 0) { return "$Kind has no non-empty 'prefixes' list" }
+  }
+  return $null
+}
+
+function Merge-LocalPrices($Base, [string]$LocalPath, $Warn) {
+  # Never throws: a broken local file is reported and the base prices stay as they are. A local
+  # file can add or replace entries; it cannot delete a base entry.
   if (-not $LocalPath -or -not (Test-Path -LiteralPath $LocalPath -PathType Leaf)) { return }
-  $loc = [System.IO.File]::ReadAllText($LocalPath) | ConvertFrom-Json
-  if ($loc.default) { $Base.default = $loc.default }
+  try {
+    $loc = [System.IO.File]::ReadAllText($LocalPath) | ConvertFrom-Json
+  } catch {
+    $Warn.Add("WARNING: $LocalPath is not valid JSON ($($_.Exception.Message)); ignored, base prices only.")
+    return
+  }
+  if ($loc -isnot [pscustomobject]) { $Warn.Add("WARNING: $LocalPath must hold a JSON object; ignored, base prices only."); return }
+  if ($loc.default) {
+    $why = Test-PriceEntry $loc.default 'default'
+    if ($why) { $Warn.Add("WARNING: ${LocalPath}: $why; skipped.") } else { $Base.default = $loc.default }
+  }
   if ($loc.families) {
-    foreach ($f in $loc.families.PSObject.Properties) {
-      $Base.families | Add-Member -NotePropertyName $f.Name -NotePropertyValue $f.Value -Force
+    if ($loc.families -isnot [pscustomobject]) { $Warn.Add("WARNING: ${LocalPath}: 'families' must be an object; skipped.") }
+    else {
+      foreach ($f in $loc.families.PSObject.Properties) {
+        $why = Test-PriceEntry $f.Value "family '$($f.Name)'"
+        if ($why) { $Warn.Add("WARNING: ${LocalPath}: $why; skipped."); continue }
+        $Base.families | Add-Member -NotePropertyName $f.Name -NotePropertyValue $f.Value -Force
+      }
     }
   }
-  if ($loc.overrides) { $Base.overrides = @(@($loc.overrides) + @($Base.overrides)) }
+  if ($loc.overrides) {
+    $good = @()
+    $n = 0
+    foreach ($o in @($loc.overrides)) {
+      $n++
+      $why = Test-PriceEntry $o "override #$n"
+      if ($why) { $Warn.Add("WARNING: ${LocalPath}: $why; skipped.") } else { $good += $o }
+    }
+    $Base.overrides = @($good + @($Base.overrides))
+  }
 }
 
 function Add-Request($Table, $Req) {
@@ -212,7 +256,8 @@ function Format-MdTable([string[]]$Headers, [object[][]]$Rows, [bool[]]$Right) {
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $Prices) { $Prices = Join-Path (Split-Path -Parent $scriptRoot) 'data\prices.json' }
 $priceTable = [System.IO.File]::ReadAllText($Prices) | ConvertFrom-Json
-Merge-LocalPrices $priceTable $LocalPrices
+$localWarnings = New-Object System.Collections.Generic.List[string]
+Merge-LocalPrices $priceTable $LocalPrices $localWarnings
 
 if (-not $MainAgent) { $MainAgent = Get-MainAgentName $Project }
 
@@ -317,6 +362,7 @@ foreach ($d in @($detail) + @($byAgent)) {
 
 # Warnings come first so nobody reads the totals without them.
 $warnings = New-Object System.Collections.Generic.List[string]
+foreach ($lw in $localWarnings) { $warnings.Add($lw) }
 if ($bad -gt 0) { $warnings.Add("WARNING: $bad line(s) could not be parsed (for example lines over 2 MB) and are NOT counted: the totals are too low.") }
 if ($unknownModels.Count -gt 0) { $warnings.Add('WARNING: unknown model family in ' + (($unknownModels | Sort-Object) -join ', ') + ': priced with the rough default weight. To price it, add a family (a "match" word from the model id plus prices) to ~/.claude/team/prices.local.json (see README, Models).') }
 if ($Mode -eq 'cost') {

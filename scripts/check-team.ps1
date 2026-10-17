@@ -78,8 +78,16 @@ foreach ($agent in $active) {
   if ($agent -eq 'lead') {
     for ($i = 1; $i -lt $end; $i++) {
       if ($lines[$i] -match '^tools:\s*(.*)$') {
-        $tools = @($Matches[1] -split ',' | ForEach-Object { $_.Trim() })
-        if ($tools -notcontains 'Skill') { $problems.Add("agent 'lead': tools list lacks Skill, so the lead cannot run the crew skills") }
+        # Accepts "A, B", "[A, B]", quoted items and a YAML block list ("- A" lines).
+        $raw = $Matches[1].Trim()
+        $items = @()
+        if ($raw -eq '') {
+          for ($j = $i + 1; $j -lt $end -and $lines[$j] -match '^\s*-\s*(.+?)\s*$'; $j++) { $items += $Matches[1] }
+        } else {
+          $items = @($raw.Trim('[', ']') -split ',')
+        }
+        $tools = @($items | ForEach-Object { $_.Trim().Trim('"', "'").Trim() } | Where-Object { $_ })
+        if ($tools -notcontains 'Skill') { $problems.Add("agent 'lead' ($found): tools list lacks Skill, so the lead cannot run the crew skills") }
         break
       }
     }
@@ -91,17 +99,29 @@ $warnings = New-Object System.Collections.Generic.List[string]
 $userPath = Join-Path $ClaudeHome 'team/USER.md'
 $routingPath = Join-Path $team 'routing.md'
 if ((Test-Path -LiteralPath $userPath -PathType Leaf) -and (Test-Path -LiteralPath $routingPath -PathType Leaf)) {
-  $available = $null; $never = @()
-  foreach ($l in [System.IO.File]::ReadAllLines($userPath)) {
-    if ($null -eq $available -and $l -match '^\s*-\s*Available models[^:]*:\s*(.*)$') {
-      $v = ($Matches[1] -replace '<!--.*?-->', '').Trim()
-      if ($v -and $v -notmatch '^<') { $available = @($v -split '[,;]' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ }) }
-    } elseif ($l -match '^\s*-\s*Never use[^:]*:\s*(.*)$') {
-      $v = $Matches[1].Trim()
-      if ($v -and $v -notmatch '^<') { $never = @($v -split '[,;]' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ }) }
+  # Accepts "- Available models: a, b" and the old "- Models available to me: a, b", with models
+  # comma separated and/or one per indented line; "Never use" works the same (also as a sub-bullet).
+  $available = @(); $never = @(); $mode = $null
+  function Add-Names([string]$Text, [string]$Into) {
+    $t = ($Text -replace '<!--.*?-->', '').Trim()
+    foreach ($x in ($t -split '[,;]')) {
+      $x = $x.Trim().Trim('`', '"', "'").Trim().ToLowerInvariant()
+      if ($x -and -not $x.StartsWith('<')) {
+        if ($Into -eq 'avail') { $script:available += $x } else { $script:never += $x }
+      }
     }
   }
-  if ($available) {
+  foreach ($l in [System.IO.File]::ReadAllLines($userPath)) {
+    if ($l -match '^\s*-?\s*(Available models|Models available to me)[^:]*:\s*(.*)$') { $mode = 'avail'; Add-Names $Matches[2] 'avail' }
+    elseif ($l -match '^\s*-?\s*Never use[^:]*:\s*(.*)$') { $mode = 'never'; Add-Names $Matches[1] 'never' }
+    elseif ($mode -and $l -match '^\s+-?\s*(\S.*)$') { Add-Names $Matches[1] $mode }
+    else { $mode = $null }
+  }
+  $available = @($available | Where-Object { $never -notcontains $_ })
+  if ($available.Count -eq 0) {
+    $warnings.Add("no 'Available models' list found in $userPath, so the model names in routing.md were not checked")
+  }
+  if ($available.Count -gt 0) {
     $modelCol = -1; $fallbackCol = -1
     foreach ($l in [System.IO.File]::ReadAllLines($routingPath)) {
       if ($l -notmatch '^\s*\|') { continue }
