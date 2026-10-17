@@ -52,6 +52,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $Crew = Join-Path $ClaudeHome 'agent-crew'
+$draftDir = ""
 $results = New-Object System.Collections.Generic.List[object]
 # git writes warnings to stderr; with ErrorActionPreference Stop that would abort.
 function GitP { $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'; try { & git -C $proj @args 2>&1 } finally { $ErrorActionPreference = $old } }
@@ -175,7 +176,7 @@ Run the crew-bootstrap skill for this project now. This is a non-interactive run
 3. Risky areas: none.
 4. Languages: English for chat and repository.
 5. I approve and merge; nothing goes straight to the default branch.
-Roster: the minimal core only. Do the whole bootstrap yourself, including PROJECT.md: subagents are disabled in this run, so write it directly instead of delegating to the coder. If a write is refused, report it. Reply in at most 8 lines.
+Roster: the minimal core only. Do the whole bootstrap yourself, including PROJECT.md: subagents are disabled in this run. Writes to .claude/team are expected to be refused in this headless run: follow the skill's fallback (drafts in one temp folder) and end your reply with the line `DRAFTS: <absolute folder path>`. Reply in at most 8 lines.
 "@
   $argList = @('-p', '--agent', 'lead', '--permission-mode', 'acceptEdits', '--max-budget-usd', "$MaxBudgetUsd", '--output-format', 'json', '--add-dir', $Crew, '--disallowedTools=Agent,Task,SendMessage')
   if ($Model) { $argList += @('--model', $Model) }
@@ -199,6 +200,7 @@ Roster: the minimal core only. Do the whole bootstrap yourself, including PROJEC
   if ($run.Error.Trim()) { Write-Host ('  claude stderr: ' + $run.Error.Trim().Substring(0, [math]::Min(600, $run.Error.Trim().Length))) }
   Write-Host "  run: $($run.Seconds) s, peak tree memory $($run.PeakMB) MB"
   if ($run.Killed) { Check 'claude run stayed within limits' $false "KILLED: $($run.Reason)" }
+  $said = ''
   try {
     $json = $out | ConvertFrom-Json
     $said = ("$($json.result)") -replace '\s+', ' '
@@ -207,7 +209,24 @@ Roster: the minimal core only. Do the whole bootstrap yourself, including PROJEC
   } catch { Write-Host "  (claude output was not JSON) $($out.Substring(0, [math]::Min(600, $out.Length)))" }
 
   # --- 4. assertions
-  $team = Join-Path $proj '.claude\team'
+  # The documented fallback of a headless run: writes to .claude/team are refused, so the skill
+  # parks drafts in a temp folder and names it on a `DRAFTS:` line. This script (not claude)
+  # copies them into a throwaway copy of the project and checks that copy.
+  $team = ''
+  $draftDir = ''
+  if ($said -match 'DRAFTS:\s*`?([^\s`*]+)') { $draftDir = $Matches[1].Trim() }
+  $draftOk = [bool]($draftDir -and (Test-Path -LiteralPath $draftDir -PathType Container))
+  Check 'reply has a DRAFTS: <folder> line naming an existing folder' $draftOk $draftDir
+  $copy = $proj + '-copy'
+  $team = Join-Path $copy '.claude\team'
+  if ($draftOk) {
+    Copy-Item -LiteralPath $proj -Destination $copy -Recurse
+    New-Item -ItemType Directory -Path $team -Force | Out-Null
+    foreach ($f in 'PROJECT.md', 'routing.md', 'roster.md', 'state.md') {
+      $src = Join-Path $draftDir $f
+      if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination $team }
+    }
+  }
   foreach ($f in 'PROJECT.md', 'routing.md', 'roster.md', 'state.md') {
     Check "$f exists" (Test-Path -LiteralPath (Join-Path $team $f))
   }
@@ -220,11 +239,15 @@ Roster: the minimal core only. Do the whole bootstrap yourself, including PROJEC
     Check 'PROJECT.md records the default branch trunk' $false 'PROJECT.md missing'
     Check "PROJECT.md records agent_crew_version $installed" $false 'PROJECT.md missing'
   }
-  $ct = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root 'scripts\check-team.ps1') -Project $proj -ClaudeHome $ClaudeHome 2>&1 | Out-String
+  $ct = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root 'scripts\check-team.ps1') -Project $(if ($draftOk) { $copy } else { $proj }) -ClaudeHome $ClaudeHome 2>&1 | Out-String
   Check 'check-team.ps1 passes' ($LASTEXITCODE -eq 0) $ct.Trim()
 } finally {
-  if ($Keep) { Write-Host "Kept: $proj" }
-  else { Remove-Item -LiteralPath $proj -Recurse -Force -ErrorAction SilentlyContinue }
+  if ($Keep) { Write-Host "Kept: $proj (and $proj-copy, drafts: $draftDir)" }
+  else {
+    Remove-Item -LiteralPath $proj -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath ($proj + '-copy') -Recurse -Force -ErrorAction SilentlyContinue
+    if ($draftDir -and $draftDir.StartsWith($env:TEMP, [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $draftDir -Recurse -Force -ErrorAction SilentlyContinue }
+  }
 }
 $failed = @($results | Where-Object { -not $_ }).Count
 Write-Host ''
