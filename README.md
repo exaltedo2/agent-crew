@@ -1,5 +1,7 @@
 # agent-crew
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A reusable, domain-free multi-agent team for [Claude Code](https://claude.com/claude-code).
 It gives every project the same small crew with cheap defaults, fixed hand-over rules,
 a cost ledger, and hooks that keep the expensive orchestrator disciplined.
@@ -22,6 +24,36 @@ Skills: `crew-bootstrap` (set a project up), `crew-retro` (measure, prune, propo
 `crew-hire`, `crew-retire`. More roles to hire from live in `catalog/` (`tester`,
 `ui-reviewer`, `security-reviewer`, `docs-writer`, `perf-profiler`). The generic rules
 and the evidence behind them are in [docs/RULES.md](docs/RULES.md).
+
+## Models
+
+Models are handled by **family**, never by exact version. `data/prices.json` has one entry per
+family (`opus`, `sonnet`, `haiku`, `fable`), each with `match` words and prices. A model id is
+priced by an `overrides` entry with the longest matching prefix first (for example older Opus
+versions at higher prices), else by the family whose word appears in the id (case-insensitive:
+`claude-opus-5-6`, `opus` and `claude-3-5-sonnet-20241022` all work). A **new version of a known
+family needs nothing**.
+
+A **whole new family** is data too. If a model's family is unknown, the ledger prices it with the
+`default` entry (a rough mid-tier weight), prints ONE warning naming the model, and carries on.
+To price it properly, add the family to `~/.claude/team/prices.local.json`, which is merged over
+`data/prices.json` and survives updates:
+
+```json
+{ "families": { "zephyr": { "match": ["zephyr"], "input": 4.0, "output": 20.0,
+                            "cache_write_5m": 5.0, "cache_write_1h": 8.0, "cache_read": 0.4 } } }
+```
+
+(`families` entries add or replace by name, `overrides` entries are added, `default` replaces
+the default.) Model names in `USER.md` and `routing.md` are free-form aliases, whatever Claude
+Code accepts; nothing validates them, and `scripts/check-team.ps1` only warns when a routing row
+names a model that is not in USER.md "Available models" and has no Fallback.
+
+**Optional models.** `USER.md` lists "Available models" (default `opus, sonnet, haiku`) and
+"Never use". The lead uses only available models; a routing row with an unavailable model uses
+its Fallback column. To enable `fable`: add it to Available models and keep the two optional
+`fable` rows in `routing.md`. **`fable` support is untested by the maintainers**, and its prices
+in `data/prices.json` are a pure guess: set real ones in `prices.local.json`.
 
 ## Install
 
@@ -155,17 +187,34 @@ agent type, model and effort, with spawn counts and an **estimated** cost. `-For
 The slug is the project path with every non-alphanumeric character replaced by `-`; Claude Code
 shortens and hashes very long paths (over about 200 characters), which this does not handle.
 
+**Share of usage.** By default (`-Mode usage`) every table has a `Share %` column (the row's cost
+weighted by model price, over the total) and no dollar figures, which fits subscription limits.
+`-Mode cost` adds the estimated dollars and total; use it only if you pay per token. The JSON
+format always carries both.
+
 Honest limits: a request that appears in both a main and a subagent transcript is counted once and
 attributed to the subagent; transcript lines that PowerShell 5.1 cannot parse (for example over 2 MB)
 are NOT counted, and the output starts with a warning with their number; long-context and fast-mode
 price tiers are not modelled.
 
-**Prices are a guess.** `data/prices.json` holds best-known list prices per model id (the longest
-matching prefix wins, so older Opus ids are priced higher than the 4.5 class). A model id without an
-exact entry is priced by its family fallback and the ledger prints a warning naming it. The file is
+**Prices are a guess.** `data/prices.json` holds best-known list prices per model family (see
+[Models](#models)). The file is
 marked `GUESS, verify`; the docs page could not be fetched when it was written. Check
 <https://docs.claude.com/en/docs/about-claude/pricing> and fix the file before trusting a dollar
 figure. Token counts are exact.
+
+## Sessions load agents at start
+
+New agents, agent tool allowlists and skills load only when a session starts. After installing
+agent-crew, or after hiring or retiring, restart the session (a resumed session also reloads).
+
+## Bootstrap is interactive
+
+`crew-bootstrap` writes under `.claude/team/`, which Claude Code treats as sensitive: you approve
+the first writes. A headless run (`-p` with `acceptEdits`) refuses them; the skill then writes its
+drafts to a temp path and tells you which files to approve or copy (or hands them to the `coder`).
+It detects the repo's default branch (`origin/HEAD`, else the current branch) instead of
+assuming `main`.
 
 ## Settings template
 

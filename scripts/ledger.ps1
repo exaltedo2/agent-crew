@@ -7,7 +7,7 @@
   <ProjectsRoot>\<slug>\<session>\subagents\agent-*.jsonl (+ sibling .meta.json with agentType,
   model, effort). Only assistant lines with a "usage" object are parsed. Streaming duplicates
   are removed per requestId (fallback message.id), keeping the record with the most output
-  tokens. Cost = tokens x data\prices.json (matched by model-id prefix).
+  tokens. Cost = tokens x data\prices.json (override prefix, else family word, else default).
 
   The `subagent_tokens` figure in notifications is a context size, not spend. This is spend.
 
@@ -19,6 +19,10 @@
 .PARAMETER Format        table (default), json or md.
 .PARAMETER MainAgent     Name for the main thread. Default: the "agent" value of .claude\settings*.json, else "main".
 .PARAMETER Prices        Path to a prices.json (default: ..\data\prices.json next to this script).
+.PARAMETER LocalPrices   Optional user file merged over prices.json (default: $HOME\.claude\team\prices.local.json).
+                         Its "families" entries add or replace families by name, its "overrides" are added, its "default" replaces the default.
+.PARAMETER Mode          usage (default): each row's share of the total, weighted by model price (what matters under
+                         subscription limits), no dollars. cost: also show estimated dollars.
 #>
 [CmdletBinding()]
 param(
@@ -30,7 +34,10 @@ param(
   [ValidateSet('table', 'json', 'md')]
   [string]$Format = 'table',
   [string]$MainAgent,
-  [string]$Prices
+  [string]$Prices,
+  [string]$LocalPrices = (Join-Path $HOME '.claude\team\prices.local.json'),
+  [ValidateSet('usage', 'cost')]
+  [string]$Mode = 'usage'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -78,16 +85,37 @@ function Read-Meta([string]$JsonlPath) {
 }
 
 function Get-PriceFor([string]$ModelId, $PriceTable) {
-  # The entry with the longest matching prefix wins, so exact model ids beat family fallbacks.
-  if (-not $ModelId) { return $null }
-  $id = $ModelId.ToLowerInvariant()
+  # Returns @{ Price; Known }. Order: longest matching override prefix, then the first family whose
+  # match word is a whole word of the model id, then the default (Known = false). No family names
+  # live in this script: they are all data.
+  $id = ([string]$ModelId).ToLowerInvariant()
   $best = $null; $bestLen = -1
-  foreach ($entry in $PriceTable.models) {
-    foreach ($prefix in $entry.prefixes) {
-      if ($id.StartsWith($prefix) -and $prefix.Length -gt $bestLen) { $best = $entry; $bestLen = $prefix.Length }
+  foreach ($entry in @($PriceTable.overrides)) {
+    foreach ($prefix in @($entry.prefixes)) {
+      $pl = ([string]$prefix).ToLowerInvariant()
+      if ($id.StartsWith($pl) -and $pl.Length -gt $bestLen) { $best = $entry; $bestLen = $pl.Length }
     }
   }
-  return $best
+  if ($best) { return @{ Price = $best; Known = $true } }
+  $words = @($id -split '[^a-z0-9]+' | Where-Object { $_ })
+  foreach ($fam in $PriceTable.families.PSObject.Properties) {
+    foreach ($m in @($fam.Value.match)) {
+      if ($words -contains ([string]$m).ToLowerInvariant()) { return @{ Price = $fam.Value; Known = $true } }
+    }
+  }
+  return @{ Price = $PriceTable.default; Known = $false }
+}
+
+function Merge-LocalPrices($Base, [string]$LocalPath) {
+  if (-not $LocalPath -or -not (Test-Path -LiteralPath $LocalPath -PathType Leaf)) { return }
+  $loc = [System.IO.File]::ReadAllText($LocalPath) | ConvertFrom-Json
+  if ($loc.default) { $Base.default = $loc.default }
+  if ($loc.families) {
+    foreach ($f in $loc.families.PSObject.Properties) {
+      $Base.families | Add-Member -NotePropertyName $f.Name -NotePropertyValue $f.Value -Force
+    }
+  }
+  if ($loc.overrides) { $Base.overrides = @(@($loc.overrides) + @($Base.overrides)) }
 }
 
 function Add-Request($Table, $Req) {
@@ -184,7 +212,7 @@ function Format-MdTable([string[]]$Headers, [object[][]]$Rows, [bool[]]$Right) {
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $Prices) { $Prices = Join-Path (Split-Path -Parent $scriptRoot) 'data\prices.json' }
 $priceTable = [System.IO.File]::ReadAllText($Prices) | ConvertFrom-Json
-$fallbackModels = New-Object System.Collections.Generic.HashSet[string]
+Merge-LocalPrices $priceTable $LocalPrices
 
 if (-not $MainAgent) { $MainAgent = Get-MainAgentName $Project }
 
@@ -249,14 +277,15 @@ foreach ($r in $requests.Values) {
   if (-not $spawns.ContainsKey($agent)) { $spawns[$agent] = New-Object System.Collections.Generic.HashSet[string] }
   [void]$spawns[$agent].Add("$($r.Session)/$($r.AgentFile)")
 
-  $p = Get-PriceFor $r.PriceModel $priceTable
-  if (-not $p) { $p = Get-PriceFor $r.Model $priceTable }
-  if ($p) {
-    if ($p.fallback) { [void]$fallbackModels.Add([string]$r.PriceModel) }
-    $row.Cost += ($r.In * $p.input + $r.Out * $p.output + $r.C5 * $p.cache_write_5m + $r.C1 * $p.cache_write_1h + $r.CR * $p.cache_read) / 1e6
-  } else {
-    [void]$unknownModels.Add([string]$r.PriceModel)
+  # The model of the message is what ran; the meta model (an alias such as "sonnet") is the fallback.
+  $hit = Get-PriceFor $r.PriceModel $priceTable
+  if (-not $hit.Known -and $r.Model -ne $r.PriceModel) {
+    $alt = Get-PriceFor $r.Model $priceTable
+    if ($alt.Known) { $hit = $alt }
   }
+  $p = $hit.Price
+  if (-not $hit.Known) { [void]$unknownModels.Add($(if ($r.PriceModel) { [string]$r.PriceModel } else { '(none)' })) }
+  $row.Cost += ($r.In * $p.input + $r.Out * $p.output + $r.C5 * $p.cache_write_5m + $r.C1 * $p.cache_write_1h + $r.CR * $p.cache_read) / 1e6
 }
 foreach ($row in $rows.Values) { $row.Spawns = $row._files.Count }
 
@@ -277,39 +306,58 @@ $byAgent = @($detail | Group-Object Agent | ForEach-Object {
     } } | Sort-Object Cost -Descending)
 
 $total = [Math]::Round((@($detail) | Measure-Object Cost -Sum).Sum, 6)
+# Share = weighted cost of the row / total. Weighted by model price, so it tracks subscription usage.
+foreach ($d in @($detail) + @($byAgent)) {
+  $share = 0.0
+  if ($total -gt 0) { $share = [Math]::Round(100.0 * $d.Cost / $total, 2) }
+  $d | Add-Member -NotePropertyName Share -NotePropertyValue $share
+}
 
 # ---------- output ----------
 
 # Warnings come first so nobody reads the totals without them.
 $warnings = New-Object System.Collections.Generic.List[string]
 if ($bad -gt 0) { $warnings.Add("WARNING: $bad line(s) could not be parsed (for example lines over 2 MB) and are NOT counted: the totals are too low.") }
-if ($unknownModels.Count -gt 0) { $warnings.Add('WARNING: no price for model(s) ' + (($unknownModels | Sort-Object) -join ', ') + ' (cost counted as 0).') }
-if ($fallbackModels.Count -gt 0) { $warnings.Add('WARNING: model(s) ' + (($fallbackModels | Sort-Object) -join ', ') + ' have no exact price entry and are priced by their family fallback: verify prices.json in the agent-crew data folder.') }
-$warnings.Add("Costs are ESTIMATES from the agent-crew data folder prices.json (as of $($priceTable.as_of), status: $($priceTable.status)). Token counts are exact.")
+if ($unknownModels.Count -gt 0) { $warnings.Add('WARNING: unknown model family in ' + (($unknownModels | Sort-Object) -join ', ') + ': priced with the rough default weight. To price it, add a family (a "match" word from the model id plus prices) to ~/.claude/team/prices.local.json (see README, Models).') }
+if ($Mode -eq 'cost') {
+  $warnings.Add("Costs are ESTIMATES from the agent-crew data folder prices.json (as of $($priceTable.as_of), status: $($priceTable.status)). Token counts are exact.")
+} else {
+  $warnings.Add("Shares are ESTIMATES weighted by model prices from prices.json (as of $($priceTable.as_of), status: $($priceTable.status)). Token counts are exact.")
+}
 
 if ($Format -eq 'json') {
   [pscustomobject]@{
     project = $Project; transcriptFolder = $folder; requests = $requests.Count
     estimated = $true
     totalCostUsd = $total; pricesAsOf = $priceTable.as_of; pricesStatus = $priceTable.status
-    unknownModels = @($unknownModels); fallbackPricedModels = @($fallbackModels); unparsedLines = $bad
+    mode = $Mode; unknownModels = @($unknownModels); unparsedLines = $bad
     warnings = @($warnings)
     byAgent = $byAgent; rows = $detail
   } | ConvertTo-Json -Depth 6
   exit 0
 }
 
-$hAgent = @('Agent', 'Spawns', 'Input', 'CacheWrite', 'CacheRead', 'Output', 'Est. cost USD')
-$rAgent = @($false, $true, $true, $true, $true, $true, $true)
-$dataAgent = @($byAgent | ForEach-Object { , @($_.Agent, $_.Spawns, (Format-Num $_.Input), (Format-Num $_.CacheWrite), (Format-Num $_.CacheRead), (Format-Num $_.Output), (Format-Money $_.Cost)) })
-$hDetail = @('Agent', 'Model', 'Effort', 'Spawns', 'Input', 'CacheW 5m', 'CacheW 1h', 'CacheRead', 'Output', 'Est. cost USD')
-$rDetail = @($false, $false, $false, $true, $true, $true, $true, $true, $true, $true)
-$dataDetail = @($detail | ForEach-Object { , @($_.Agent, $_.Model, $_.Effort, $_.Spawns, (Format-Num $_.Input), (Format-Num $_.CacheWrite5m), (Format-Num $_.CacheWrite1h), (Format-Num $_.CacheRead), (Format-Num $_.Output), (Format-Money $_.Cost)) })
+$cost = ($Mode -eq 'cost')
+$hAgent = @('Agent', 'Spawns', 'Input', 'CacheWrite', 'CacheRead', 'Output'); $rAgent = @($false, $true, $true, $true, $true, $true)
+$hDetail = @('Agent', 'Model', 'Effort', 'Spawns', 'Input', 'CacheW 5m', 'CacheW 1h', 'CacheRead', 'Output'); $rDetail = @($false, $false, $false, $true, $true, $true, $true, $true, $true)
+if ($cost) { $hAgent += 'Est. cost USD'; $rAgent += $true; $hDetail += 'Est. cost USD'; $rDetail += $true }
+$hAgent += 'Share %'; $rAgent += $true; $hDetail += 'Share %'; $rDetail += $true
+function Format-Share([double]$v) { return [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:N1}', $v) }
+$dataAgent = @($byAgent | ForEach-Object {
+    $c = @($_.Agent, $_.Spawns, (Format-Num $_.Input), (Format-Num $_.CacheWrite), (Format-Num $_.CacheRead), (Format-Num $_.Output))
+    if ($cost) { $c += (Format-Money $_.Cost) }
+    $c += (Format-Share $_.Share); , $c })
+$dataDetail = @($detail | ForEach-Object {
+    $c = @($_.Agent, $_.Model, $_.Effort, $_.Spawns, (Format-Num $_.Input), (Format-Num $_.CacheWrite5m), (Format-Num $_.CacheWrite1h), (Format-Num $_.CacheRead), (Format-Num $_.Output))
+    if ($cost) { $c += (Format-Money $_.Cost) }
+    $c += (Format-Share $_.Share); , $c })
+$title = 'Estimated cost'
+if (-not $cost) { $title = 'Share of usage (weighted by model price; subscription limits)' }
 
 $lines = New-Object System.Collections.Generic.List[string]
 if ($Format -eq 'md') {
   foreach ($w in $warnings) { $lines.Add("> $w"); $lines.Add('') }
-  $lines.Add("**Total (estimated): `$$(Format-Money $total)** over $($requests.Count) requests")
+  if ($cost) { $lines.Add("**Total (estimated): `$$(Format-Money $total)** over $($requests.Count) requests") } else { $lines.Add("**$title**, $($requests.Count) requests") }
   $lines.Add('')
   $lines.Add('By agent type')
   $lines.Add('')
@@ -322,7 +370,7 @@ if ($Format -eq 'md') {
   foreach ($w in $warnings) { $lines.Add($w) }
   $lines.Add('')
   $lines.Add("Project:  $Project")
-  $lines.Add("Requests: $($requests.Count)   Total (estimated): `$$(Format-Money $total)")
+  if ($cost) { $lines.Add("Requests: $($requests.Count)   Total (estimated): `$$(Format-Money $total)") } else { $lines.Add("Requests: $($requests.Count)"); $lines.Add($title) }
   $lines.Add('')
   $lines.Add('By agent type')
   $lines.AddRange([string[]](Format-TextTable $hAgent $dataAgent $rAgent))

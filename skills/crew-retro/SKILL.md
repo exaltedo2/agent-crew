@@ -18,8 +18,12 @@ it says `never`, use the whole history):
 powershell -NoProfile -File "$HOME\.claude\agent-crew\scripts\ledger.ps1" -Project . -Since <date> -Format md
 ```
 
-Add `-Alias old=new` for agents that were renamed. The ledger gives cost per agent type,
-model and effort, and spawn counts. Remember: `subagent_tokens` in notifications is a
+Add `-Alias old=new` for agents that were renamed. The ledger gives, per agent type, model
+and effort, the spawn counts and the **share of usage** (each row's cost weighted by model
+price, divided by the total; this is what matters under subscription limits). Report shares
+by default. Add `-Mode cost` and report dollars only if PROJECT.md or USER.md says the user
+pays per token. A warning "unknown model family" means a model the price file does not know:
+tell the user to add its family to `~/.claude/team/prices.local.json` (README, Models). Remember: `subagent_tokens` in notifications is a
 context size, not spend; only the ledger is spend.
 
 ## 2. Update the evidence

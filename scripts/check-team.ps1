@@ -6,7 +6,11 @@
   Checks: the four team files exist; state.md <= 50, routing.md <= 150, roster.md <= 80 lines;
   every agent in the roster's Active table has an agent file (project .claude/agents or
   <ClaudeHome>/agents); at most 7 active agents; every such agent file has a one-line
-  `description:` in its front matter.
+  `description:` in its front matter; the `lead` agent, if it has a `tools:` list, includes
+  `Skill` (without it the lead cannot run crew-bootstrap, crew-retro, crew-hire, crew-retire).
+  Warns (never fails) when a routing.md row names a model that is missing from the "Available
+  models" list of <ClaudeHome>\team\USER.md and has no Fallback. Model names are free-form:
+  unknown names are never rejected.
 
 .PARAMETER Project     Project folder (default: current folder).
 .PARAMETER ClaudeHome  User-level Claude folder (default: $HOME\.claude).
@@ -71,8 +75,54 @@ foreach ($agent in $active) {
   $value = ($lines[$descIndex] -replace '^description:\s*', '').Trim()
   if ($value -eq '' -or $value -match '^[|>][+-]?$') { $problems.Add("agent '$agent': description must be one line of text"); continue }
   if ($descIndex + 1 -lt $end -and $lines[$descIndex + 1] -match '^\s+\S') { $problems.Add("agent '$agent': description spans several lines") }
+  if ($agent -eq 'lead') {
+    for ($i = 1; $i -lt $end; $i++) {
+      if ($lines[$i] -match '^tools:\s*(.*)$') {
+        $tools = @($Matches[1] -split ',' | ForEach-Object { $_.Trim() })
+        if ($tools -notcontains 'Skill') { $problems.Add("agent 'lead': tools list lacks Skill, so the lead cannot run the crew skills") }
+        break
+      }
+    }
+  }
 }
 
+# Routing rows vs the user's available models: a warning only, names are free-form aliases.
+$warnings = New-Object System.Collections.Generic.List[string]
+$userPath = Join-Path $ClaudeHome 'team/USER.md'
+$routingPath = Join-Path $team 'routing.md'
+if ((Test-Path -LiteralPath $userPath -PathType Leaf) -and (Test-Path -LiteralPath $routingPath -PathType Leaf)) {
+  $available = $null; $never = @()
+  foreach ($l in [System.IO.File]::ReadAllLines($userPath)) {
+    if ($null -eq $available -and $l -match '^\s*-\s*Available models[^:]*:\s*(.*)$') {
+      $v = ($Matches[1] -replace '<!--.*?-->', '').Trim()
+      if ($v -and $v -notmatch '^<') { $available = @($v -split '[,;]' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ }) }
+    } elseif ($l -match '^\s*-\s*Never use[^:]*:\s*(.*)$') {
+      $v = $Matches[1].Trim()
+      if ($v -and $v -notmatch '^<') { $never = @($v -split '[,;]' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ }) }
+    }
+  }
+  if ($available) {
+    $modelCol = -1; $fallbackCol = -1
+    foreach ($l in [System.IO.File]::ReadAllLines($routingPath)) {
+      if ($l -notmatch '^\s*\|') { continue }
+      $cells = @($l.Trim().Trim('|') -split '\|' | ForEach-Object { $_.Trim() })
+      if ($cells.Count -gt 1 -and $cells[1] -ieq 'Model') {
+        $modelCol = 1; $fallbackCol = -1
+        for ($c = 0; $c -lt $cells.Count; $c++) { if ($cells[$c] -ieq 'Fallback') { $fallbackCol = $c } }
+        continue
+      }
+      if ($modelCol -lt 0 -or $cells.Count -le $modelCol -or $cells[$modelCol] -match '^[-: ]*$') { continue }
+      $m = $cells[$modelCol].ToLowerInvariant()
+      $fb = ''
+      if ($fallbackCol -ge 0 -and $cells.Count -gt $fallbackCol) { $fb = $cells[$fallbackCol] }
+      if (($available -notcontains $m -or $never -contains $m) -and ($fb -match '^[-: ]*$')) {
+        $warnings.Add("routing.md row '$($cells[0])' names model '$($cells[$modelCol])', which is not in USER.md Available models, and has no Fallback")
+      }
+    }
+  }
+}
+
+foreach ($w in $warnings) { Write-Output "WARN: $w" }
 if ($problems.Count -eq 0) {
   Write-Output "OK: .claude/team passes ($($active.Count) active agents)."
   exit 0

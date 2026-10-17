@@ -4,6 +4,26 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## 0.2.0 - 2026-10-17
+
+- Model families instead of exact ids: `data/prices.json` is keyed by family (`opus`, `sonnet`,
+  `haiku`, `fable`) with optional `overrides` by exact id or prefix. New versions of a known family
+  never warn. Families are data (no family name in `ledger.ps1`); an unknown family is priced with
+  a `default` weight and warned about once. Users add families in
+  `~/.claude/team/prices.local.json`, merged over the installed file.
+- Ledger: `Share %` column in every table and `-Mode usage|cost` (default `usage`: no dollars).
+  `crew-retro` reports shares by default.
+- Optional models: `USER.md` "Available models" / "Never use"; the lead uses only available
+  models; `routing.md` has a Fallback column and two optional, untested `fable` rows. `check-team`
+  warns (never fails) about a routing row whose model is unavailable and has no fallback.
+- Fix: the `lead` agent lacked `Skill` in `tools:` and could not run any crew skill.
+  `check-team` now fails a `lead` whose tools list lacks it.
+- `crew-bootstrap` is documented as interactive, falls back to drafts in a temp path when writes
+  to `.claude/team` are refused, and detects the default branch instead of assuming `main`.
+- Rule 21: new agents, allowlists and skills load at session start; restart after installing or
+  hiring.
+- README: license badge and a "Models" section.
+
 ## 0.1.0 - 2026-10-17
 
 First version.
