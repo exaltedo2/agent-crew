@@ -42,6 +42,16 @@ Do not run the checks now. Do not edit project files.
 
 Keep `~/.claude/team/USER.md` in mind: it already answers the chat language and attribution.
 
+**Non-interactive path (opt-in, not the default).** If the request already contains the answers
+to these questions, or AskUserQuestion is not available (for example a headless `claude -p`
+run, as in `tests/e2e-bootstrap.ps1`), do not ask. Use the answers given; for each question
+without one, use a default: deliverable = "a change on a branch with a pull request, checks
+passing"; correctness = the commands found in step 1 (none found: say so in PROJECT.md);
+risky areas = none known; languages = English for chat and repository; approval = the user
+merges, nothing goes straight to the default branch (`direct_to_main: []`). Skip step 3's
+question and take the minimal core roster (plus any role the request names). Say in the final
+report which answers were given and which were defaulted. When interactive, always ask.
+
 ## 3. Propose the roster (one message, the user answers in one line)
 
 Minimal core: `lead`, `coder`, `reviewer`, `scout`. Add `thinker` and `architect` only if
@@ -61,9 +71,16 @@ The lead writes the files that are its own (a hook blocks the file-edit tools el
 - no `reports/` or `snapshots/` folder: agents and hooks create them when first needed.
 
 If a write to `.claude/team/` is refused (not approved, or a headless run), do not retry in a
-loop: write every draft to the OS temp folder (or a path the user names) and tell the user the
-exact files and their target paths to approve or copy; or hand the placement to the `coder`
-with the absolute draft paths, as for the files below.
+loop: write every draft to ONE new folder `crew-bootstrap-drafts/` in the project root (inside
+the project but outside `.claude/`; headless runs refuse writes outside the project, temp
+folders included),
+each file under its target name relative to `.claude/team/` (`PROJECT.md`, `routing.md`,
+`roster.md`, `state.md`), including `PROJECT.md` under exactly that name, not `bootstrap-PROJECT.md` (that name is for the
+`reports/` drafts below, not for this folder; no `coder` is needed just to park a draft).
+End the reply with a line `DRAFTS: <absolute folder path>` and tell the user to move the files
+into `.claude/team/`, delete the folder, and in so many words to add `crew-bootstrap-drafts/` to
+`.gitignore` (the lead does not write `.gitignore` itself) or delete the folder before any commit; or hand the placement to the `coder` with the absolute draft paths, as for
+the files below.
 
 The lead may NOT write `PROJECT.md`, `.claude/settings.local.json` or `.gitignore`. Instead it
 drafts them into `.claude/team/reports/bootstrap-PROJECT.md`, `bootstrap-settings.local.json`

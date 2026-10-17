@@ -337,9 +337,9 @@ try {
   Check 'session-start resume: old marker asks for the retro' ($r.Out -match 'crew-retro' -and $r.Out -match '10 days')
   Set-Content -LiteralPath $marker -Value (Get-Date).ToString('o')
   $proj2 = Join-Path $proj '.claude/team/PROJECT.md'
-  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.2.1', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
+  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.2.2', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
   $r = Start-Hook 'startup'
-  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0.2.1')
+  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0.2.2')
   $r = Start-Hook 'startup' (ConvertTo-Slash $Work)
   Check 'session-start without .claude/team is silent' ($r.Out.Trim() -eq '')
 

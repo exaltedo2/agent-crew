@@ -241,6 +241,19 @@ Plain PowerShell, no Pester. Runs the ledger and `check-team` on fixtures, every
 stdin, and the installer against a temp folder (install twice, `-Update` with an edited file,
 `-Uninstall`).
 
+Opt-in end-to-end test of `crew-bootstrap` (NOT part of `run.ps1`, it spends real usage, capped
+by `-MaxBudgetUsd`, default 3):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\e2e-bootstrap.ps1 [-Keep] [-Model sonnet]
+```
+
+It makes a temp git project on a branch called `trunk`, runs `claude -p --agent lead` in it with
+the bootstrap answers given up front (the skill's non-interactive path), and checks the four team
+files, the default branch and `agent_crew_version` in `PROJECT.md`, and `check-team`. It uses
+your real installed `~/.claude` (agent-crew must be installed) and does not modify it; the skill
+under test is the one in this checkout.
+
 ## Not verified yet
 
 - That the settings.json PreToolUse hook really blocks the lead's edit in a live session (the script

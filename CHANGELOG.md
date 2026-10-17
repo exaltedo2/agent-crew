@@ -4,6 +4,16 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## 0.2.2 - 2026-10-17
+
+- `tests/e2e-bootstrap.ps1`: opt-in end-to-end test of `crew-bootstrap` with a real headless
+  Claude Code run (not part of `tests/run.ps1`, spends real usage).
+- `crew-bootstrap`: a non-interactive path (answers given in the request, or no AskUserQuestion):
+  use the given answers, default the rest and say which. Interactive stays the default.
+- `crew-bootstrap` fallback when writes to `.claude/team/` are refused: drafts go to
+  `<project>/crew-bootstrap-drafts/` (named on a `DRAFTS:` line), not the OS temp folder: headless
+  runs refuse temp paths too, so this fixes the real fallback as well as the e2e test.
+
 ## 0.2.1 - 2026-10-17
 
 Review fixes for 0.2.0.
