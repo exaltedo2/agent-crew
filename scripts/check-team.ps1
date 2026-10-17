@@ -168,14 +168,10 @@ foreach ($w in $ramProject) { $problems.Add($w) }
 $userFm = Get-FrontMatter (Join-Path (Join-Path $ClaudeHome 'team') 'USER.md')
 foreach ($g in @($userFm['lead_writable'])) {
   if ([string]::IsNullOrWhiteSpace($g)) { continue }
-  $t = ConvertTo-SlashPath $g.Trim()
-  if ($t -notmatch '^(~(/|$)|/|[A-Za-z]:/)') { $warnings.Add("USER.md lead_writable '$g' is not absolute or ~-relative: it is ignored"); continue }
-  if ($t -match '(?i)(^|/)settings[^/]*\.json$|(^|/)(hooks|agents)(/|$)|(^|/)PROJECT\.md$') {
-    $warnings.Add("USER.md lead_writable '$g' names settings, hooks, agent files or PROJECT.md: the guard never allows these"); continue
-  }
-  $literal = ($t -split '[*?]')[0]
-  if ($literal.StartsWith('~')) { $literal = (ConvertTo-SlashPath $HOME).TrimEnd('/') + $literal.Substring(1) }
-  $d = $literal
+  $why = Get-UserLeadGlobProblem $g
+  if ($why) { $warnings.Add("USER.md lead_writable '$g' is ignored by the guard: $why"); continue }
+  $d = ($g.Trim() -split '[*?]')[0]
+  if ($d.StartsWith('~')) { $d = (ConvertTo-SlashPath $HOME).TrimEnd('/') + $d.Substring(1) }
   while ($d) {
     if ([System.IO.Directory]::Exists((Join-Path $d '.git')) -or [System.IO.File]::Exists((Join-Path $d '.git'))) {
       $warnings.Add("USER.md lead_writable '$g' is inside a git repository: the guard never allows it (code changes go through a PR)"); break

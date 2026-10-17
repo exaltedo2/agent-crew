@@ -8,7 +8,10 @@ the session-start hook says when it differs from the installed one.
 
 - The lead may do small personal edits itself: optional `lead_writable` list (absolute or `~`-relative globs) in
   the front matter of `~/.claude/team/USER.md`, honoured by `guard-paths` for files outside the project. Never
-  allowed even if listed: settings*.json, hooks, agent files, PROJECT.md, anything inside a git repository.
+  allowed even if listed: settings*.json, hooks, agent files, PROJECT.md, anything inside a git repository (also bare),
+  anything in `~/.claude` except `notes/**`, shell profiles, `.ssh`, Startup, `.gitconfig`. Relative, drive-root and
+  home-folder globs are ignored. The lead may now write only `~/.claude/team/reports/**` in the user team folder (not
+  USER.md or ram-guard.json). 8.3 short names are expanded; errors in the user-list check deny.
   `check-team` warns about such entries. `lead.md` "When NOT to delegate" says the lead does these itself.
 
 ## 0.3.0 - 2026-10-17

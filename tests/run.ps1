@@ -291,6 +291,76 @@ try {
     Check 'guard: USER.md list never allows a git repository' ((Guard 'lead' "$gitLn/a.txt").Exit -eq 2)
     Check 'guard: USER.md list does not widen a report-only agent' ((Guard 'thinker' "$fh/.claude/notes/me.md").Exit -eq 2)
     Check 'guard: USER.md list does not apply inside the project' ((Guard 'lead' "$pj/src/a.txt").Exit -eq 2)
+
+    # --- review fixes: each attack on the user list ---
+    $userMd = Join-Path $fakeHome '.claude\team\USER.md'
+    function SetUserList([string[]]$items) {
+      $body = "---`nlead_writable:`n" + (($items | ForEach-Object { "  - '$_'" }) -join "`n") + "`n---`n"
+      [System.IO.File]::WriteAllText($userMd, $body)
+    }
+    New-Item -ItemType Directory -Force -Path (Join-Path $fakeHome '.claude\team\reports'), (Join-Path $fakeHome '.claude\skills'), (Join-Path $fakeHome 'Documents\WindowsPowerShell'), (Join-Path $guardTmp 'plain\Startup'), (Join-Path $guardTmp 'plain\longrepositoryname\.git'), (Join-Path $guardTmp 'bare\objects'), (Join-Path $guardTmp 'bare\refs') | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $fakeHome '.claude\team\ram-guard.json'), '{}')
+    [System.IO.File]::WriteAllText((Join-Path $fakeHome '.claude\CLAUDE.md'), 'x')
+    [System.IO.File]::WriteAllText((Join-Path $guardTmp 'bare\HEAD'), 'ref: refs/heads/main')
+    $bareLn = ConvertTo-Slash (Join-Path $guardTmp 'bare')
+
+    # A: the user team folder is reports/** only, even with a list that covers it
+    SetUserList @('~/.claude/notes/**', "$fh/.claude/team/**")
+    Check 'guard A: lead cannot write USER.md' ((Guard 'lead' "$fh/.claude/team/USER.md").Exit -eq 2)
+    Check 'guard A: lead cannot write the user ram-guard.json' ((Guard 'lead' "$fh/.claude/team/ram-guard.json").Exit -eq 2)
+    Check 'guard A: lead cannot write other user team files' ((Guard 'lead' "$fh/.claude/team/state.md").Exit -eq 2)
+    Check 'guard A: lead may write ~/.claude/team/reports/**' ((Guard 'lead' "$fh/.claude/team/reports/r.md").Exit -eq 0)
+
+    # B: inside ~/.claude only notes/** can be granted
+    SetUserList @('~/.claude/notes/**', '~/.claude/**', "$fh/**")
+    Check 'guard B: notes still work' ((Guard 'lead' "$fh/.claude/notes/me.md").Exit -eq 0)
+    $bad = @('.claude/CLAUDE.md', '.claude/skills/s.md', '.claude/commands/c.md', '.claude/plugins/p.json', '.claude/agents/a.md', '.claude/hooks/h.ps1', '.claude/agent-crew/hooks/x.ps1', '.claude/keybindings.json', '.claude/settings.json', '.claude/settings.local.json', '.claude.json')
+    $allDenied = $true
+    foreach ($b in $bad) { if ((Guard 'lead' "$fh/$b").Exit -ne 2) { $allDenied = $false; Write-Host "    not denied: $b" } }
+    Check 'guard B: CLAUDE.md, skills, commands, plugins, agents, hooks, agent-crew, keybindings, settings*, .claude.json are denied' $allDenied
+
+    # C: refused globs and code-execution spots
+    SetUserList @('relative/**', '/**', 'C:/**', '~/**', '~', "$plainLn/**")
+    Check 'guard C: relative, root, drive-root and home globs grant nothing' (((Guard 'lead' "$fh/x.txt").Exit -eq 2) -and ((Guard 'lead' "$fh/Documents/d.txt").Exit -eq 2) -and ((Guard 'lead' "C:/Windows/Temp/x.txt").Exit -eq 2))
+    Check 'guard C: a valid glob still works' ((Guard 'lead' "$plainLn/a.txt").Exit -eq 0)
+    SetUserList @("$plainLn/**", '~/.bashrc', '~/.ssh/**', "$fh/**", '~/Documents/**')
+    $spots = @("$plainLn/.bashrc", "$plainLn/.zshrc", "$plainLn/.profile", "$plainLn/.gitconfig", "$plainLn/.ssh/authorized_keys", "$plainLn/Startup/x.cmd", "$plainLn/Microsoft.PowerShell_profile.ps1", "$plainLn/WindowsPowerShell/profile.ps1", "$fh/Documents/WindowsPowerShell/profile.ps1", "$fh/.bashrc", "$fh/.ssh/id_rsa")
+    $allDenied = $true
+    foreach ($b in $spots) { if ((Guard 'lead' $b).Exit -ne 2) { $allDenied = $false; Write-Host "    not denied: $b" } }
+    Check 'guard C: shell profiles, .ssh, Startup, .gitconfig, PowerShell profile folders are denied under a valid glob' $allDenied
+
+    # D: 8.3 short names
+    SetUserList @("$plainLn/**", "$guardTmp/**".Replace('\', '/'))
+    $shortFile = (& cmd /c "for %I in (`"$fakeHome\.claude\CLAUDE.md`") do @echo %~sI").Trim()
+    if ($shortFile -match '~') {
+      Check 'guard D: a short-name alias of a denied ~/.claude file is denied' ((Guard 'lead' (ConvertTo-Slash $shortFile)).Exit -eq 2)
+      $shortRepo = (& cmd /c "for %I in (`"$guardTmp\plain\longrepositoryname`") do @echo %~sI").Trim()
+      Check 'guard D: a short-name alias of a git repository is denied (also for a new file)' ((Guard 'lead' ((ConvertTo-Slash $shortRepo) + '/new.txt')).Exit -eq 2)
+    } else {
+      Write-Host '  skip guard D: this volume makes no 8.3 short names'
+    }
+
+    # F: bare repositories
+    SetUserList @("$plainLn/**", "$bareLn/**")
+    Check 'guard F: a bare repository (HEAD + objects + refs) is denied' ((Guard 'lead' "$bareLn/config").Exit -eq 2)
+    Check 'guard F: a .git work-tree repository is denied' ((Guard 'lead' "$plainLn/longrepositoryname/a.txt").Exit -eq 2)
+
+    # E: fail closed when the list cannot be read
+    SetUserList @('~/.claude/notes/**')
+    Check 'guard E: before the lock the note is allowed' ((Guard 'lead' "$fh/.claude/notes/me.md").Exit -eq 0)
+    $lock = [System.IO.File]::Open($userMd, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    try {
+      $r = Guard 'lead' "$fh/.claude/notes/me.md"
+      Check 'guard E: an unreadable USER.md denies (fail closed) with a reason' (($r.Exit -eq 2) -and ($r.Err -match 'failed'))
+    } finally { $lock.Close() }
+
+    # check-team warns about every refused entry
+    $uh2 = Join-Path $guardTmp 'userbad'
+    New-Item -ItemType Directory -Force -Path (Join-Path $uh2 'team') | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $uh2 'team\USER.md'), "---`nlead_writable:`n  - 'relative/x'`n  - '/**'`n  - 'C:/**'`n  - '~/**'`n  - '~/.claude/**'`n  - '~/.ssh/**'`n  - '~/.claude/notes/**'`n---`n")
+    $r = Invoke-Check @('-Project', $ok, '-ClaudeHome', $uh2)
+    $warned = @('relative/x', '/**', 'C:/**', '~/**', '~/.claude/**', '~/.ssh/**') | Where-Object { $r.Out -notmatch ("WARN: USER.md lead_writable '" + [regex]::Escape($_) + "' is ignored") }
+    Check 'check-team: warns about relative, root, drive, home, ~/.claude/** and .ssh entries but not notes/**' ((@($warned).Count -eq 0) -and ($r.Out -notmatch "lead_writable '~/.claude/notes/\*\*'")) $r.Out
   } finally {
     $env:HOME = $saved.H; $env:USERPROFILE = $saved.U; $env:CLAUDE_CONFIG_DIR = $saved.C
   }
