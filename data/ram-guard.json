@@ -1,7 +1,8 @@
 {
   "status": "GUESS: every number in this file is an untested guess, tune it for your machine",
-  "note": "RAM guard defaults. Merge order: this file < ~/.claude/team/ram-guard.json < <project>/.claude/team/ram-guard.json. A later file replaces a kind of the same name field by field (min_free_mb, patterns, tools, enabled) and may add new kinds. 'enabled': false at the top level switches the whole guard off; per kind it switches that kind off. A kind needs 'min_free_mb' (a number above 0) and either 'tools' containing Agent/Task, or 'patterns' (regular expressions, case-insensitive, matched against the Bash/PowerShell command; 'tools' then defaults to Bash and PowerShell). The guard blocks a new call when the free physical memory (available memory: free plus cache that can be dropped) is below 'min_free_mb' of the matching kind (the highest one if several match). It never kills anything.",
+  "note": "RAM guard defaults. Merge order: this file < ~/.claude/team/ram-guard.json (user) < <project>/.claude/team/ram-guard.json (project). The user file may change anything. The project file may only make things stricter: it can raise a threshold (never above the user's project_max_mb), add kinds, and add patterns or tools to a kind; 'enabled', lowering a threshold and project_max_mb in it are ignored with a warning. A user kind of the same name replaces a field of this file (min_free_mb, patterns, tools, enabled, hook_if). 'enabled': false at the top level switches the whole guard off, per kind that kind. A kind needs 'min_free_mb' (a number above 0) and either 'tools' containing Agent/Task (matches every subagent spawn; patterns are ignored for those tools), or 'patterns' (regular expressions, case-insensitive, 200 ms match timeout, matched against the Bash/PowerShell command; 'tools' then defaults to Bash and PowerShell; a shell kind without a valid pattern is skipped). The guard blocks a new call when the free physical memory (available memory: free plus cache that can be dropped) is below 'min_free_mb' of the matching kind (the highest one if several match). It never kills anything. 'hook_if': command globs used only by the installer to start the hook for Bash/PowerShell only when a command matches (Bash(claude *) etc.); a user kind with patterns but no hook_if, or 'scan_all_commands': true in the user file, makes the installer register the hook for every shell command instead (slower). Re-run install.ps1 after changing hook_if.",
   "enabled": true,
+  "project_max_mb": 8000,
   "kinds": {
     "agent-spawn": {
       "description": "Starting a subagent (each one is a separate model session plus its tools)",
@@ -9,8 +10,9 @@
       "min_free_mb": 1500
     },
     "claude-headless": {
-      "description": "A headless Claude Code run started from the shell (claude -p / --print)",
-      "patterns": ["(^|[\\s;&|(\"'])claude(\\.exe|\\.cmd)?\\s+(.*\\s)?(-p|--print)(\\s|$)"],
+      "description": "A headless Claude Code run started from the shell (claude -p / --print) at the start of a command, after ; && || | $( or a newline; not inside quotes or as an argument of another command",
+      "patterns": ["(^|[;&|\\n(`])\\s*([A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(\\S*[\\\\/])?claude(\\.exe|\\.cmd)?\\s+([^;&|\\n]*\\s)?(-p|--print)(\\s|$)"],
+      "hook_if": ["claude *", "claude.exe *", "claude.cmd *"],
       "min_free_mb": 2500
     }
   }

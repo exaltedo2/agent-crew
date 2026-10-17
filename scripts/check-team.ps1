@@ -145,7 +145,7 @@ if ((Test-Path -LiteralPath $userPath -PathType Leaf) -and (Test-Path -LiteralPa
 
 # RAM guard config files (hooks/ram-guard.ps1 fails open on a bad file, so a mistake would go unnoticed).
 # A bad project file is a problem (it is committed with the project); a bad user or shipped file is a warning.
-$ramConfig = @{ enabled = $true; kinds = [ordered]@{} }
+$ramConfig = New-RamConfig
 $ramShipped = New-Object System.Collections.Generic.List[string]
 $ramUser = New-Object System.Collections.Generic.List[string]
 $ramProject = New-Object System.Collections.Generic.List[string]
@@ -156,10 +156,8 @@ Read-RamLayer $ramConfig $ramUserFile 'user' $ramUser
 Read-RamLayer $ramConfig $ramProjectFile 'project' $ramProject
 if ((Test-Path -LiteralPath $ramUserFile -PathType Leaf) -or (Test-Path -LiteralPath $ramProjectFile -PathType Leaf)) {
   foreach ($name in $ramConfig.kinds.Keys) {
-    $k = $ramConfig.kinds[$name]
-    if ($null -eq $k.min_free_mb -or (@($k.tools).Count -eq 0 -and @($k.patterns).Count -eq 0)) {
-      $ramUser.Add("ram-guard: kind '$name' needs min_free_mb and either tools or patterns, so the hook skips it.")
-    }
+    $why = Get-RamKindProblem $ramConfig.kinds[$name]
+    if ($why) { $ramUser.Add("ram-guard: kind '$name' is skipped by the hook: $why.") }
   }
 }
 foreach ($w in $ramShipped) { $warnings.Add($w) }

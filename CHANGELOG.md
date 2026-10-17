@@ -6,13 +6,22 @@ the session-start hook says when it differs from the installed one.
 
 ## 0.3.0 - 2026-10-17
 
-- New hook `ram-guard` (PreToolUse `Agent|Task|Bash|PowerShell`): blocks starting new work when
-  free physical memory is below the threshold of that kind of job; never kills anything. Defaults in
-  `data/ram-guard.json` (subagent spawn 1500 MB, headless `claude` 2500 MB: guesses), overridden by
-  `~/.claude/team/ram-guard.json` and `<project>/.claude/team/ram-guard.json` (plugin < user <
-  project); `"enabled": false` switches it off. Fails open on a bad config or unreadable memory.
-- The installers register the new hook (six hook entries now); `lead.md` says what to do on a block;
-  `check-team` validates the `ram-guard.json` files. See the README section "RAM guard".
+- New hook `ram-guard` (PreToolUse): blocks starting new work when free physical memory is below the
+  threshold of that kind of job; never kills anything. Defaults in `data/ram-guard.json` (subagent spawn
+  1500 MB, headless `claude` 2500 MB: guesses), overridden by `~/.claude/team/ram-guard.json` and
+  `<project>/.claude/team/ram-guard.json` (shipped < user < project); `"enabled": false` switches it off.
+  Fails open on a bad config or unreadable memory.
+- Trust boundary: the project file can only make things stricter (add kinds, patterns and tools, raise a
+  threshold up to the user's `project_max_mb`, default 8000); lowering, disabling and `project_max_mb` in it
+  are ignored with a warning. Patterns have a 200 ms match timeout; a shell kind without a valid pattern is
+  skipped. The `claude -p` default pattern matches only at the start of a command (not in quotes or
+  arguments).
+- Latency: the Agent|Task entry is unconditional, the Bash and PowerShell entries carry Claude Code's hook
+  `if` filter (`Bash(claude *)`...) built by the installers from the `hook_if` globs in the shipped and the
+  user `ram-guard.json` (re-run the installer after changing them; `scan_all_commands` or a user shell kind
+  without `hook_if` gives one unfiltered entry). The installer now builds the hook plan dynamically.
+- `lead.md` says what to do on a block; `check-team` validates the `ram-guard.json` files. See the README
+  section "RAM guard".
 - `crew-common.ps1`: `Find-TeamRoot` and `Get-UserClaudeDirs` use .NET file checks instead of
   `Test-Path` (the first `Test-Path` call costs about 50 ms in Windows PowerShell).
 
