@@ -44,6 +44,12 @@ To price it properly, add the family to `~/.claude/team/prices.local.json`, whic
                             "cache_write_5m": 5.0, "cache_write_1h": 8.0, "cache_read": 0.4 } } }
 ```
 
+If two families match one id, the first in file order wins (the base file before the local one,
+so a local family cannot take over an id a base family already matches; put the id in an
+`overrides` prefix instead). A local file can add or replace entries but cannot delete a base
+entry. A malformed local file, or an entry without all five numeric prices (or without `match`),
+is skipped with a warning; the ledger never crashes on it.
+
 (`families` entries add or replace by name, `overrides` entries are added, `default` replaces
 the default.) Model names in `USER.md` and `routing.md` are free-form aliases, whatever Claude
 Code accepts; nothing validates them, and `scripts/check-team.ps1` only warns when a routing row

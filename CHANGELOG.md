@@ -4,6 +4,19 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## 0.2.1 - 2026-10-17
+
+Review fixes for 0.2.0.
+
+- A malformed `prices.local.json`, or an invalid entry in it (missing or non-numeric price, empty
+  `match`), is skipped with a warning; the ledger never crashes on it.
+- `check-team` reads both the new USER.md layout ("Available models:") and the old one
+  ("Models available to me:", models comma separated and/or one per indented line, "Never use:"
+  sub-bullet), accepts `tools:` as a comma string, flow list or block list, names the agent file
+  in the Skill message, and warns when no available-models list is found.
+- README: which family wins when two match, and that a local file cannot delete a base entry.
+- Tests no longer read the real `~/.claude` (local price file, USER.md).
+
 ## 0.2.0 - 2026-10-17
 
 - Model families instead of exact ids: `data/prices.json` is keyed by family (`opus`, `sonnet`,
