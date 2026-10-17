@@ -164,6 +164,28 @@ foreach ($w in $ramShipped) { $warnings.Add($w) }
 foreach ($w in $ramUser) { $warnings.Add($w) }
 foreach ($w in $ramProject) { $problems.Add($w) }
 
+# USER.md `lead_writable` (optional): warn on entries the guard will never honour.
+$userFm = Get-FrontMatter (Join-Path (Join-Path $ClaudeHome 'team') 'USER.md')
+foreach ($g in @($userFm['lead_writable'])) {
+  if ([string]::IsNullOrWhiteSpace($g)) { continue }
+  $t = ConvertTo-SlashPath $g.Trim()
+  if ($t -notmatch '^(~(/|$)|/|[A-Za-z]:/)') { $warnings.Add("USER.md lead_writable '$g' is not absolute or ~-relative: it is ignored"); continue }
+  if ($t -match '(?i)(^|/)settings[^/]*\.json$|(^|/)(hooks|agents)(/|$)|(^|/)PROJECT\.md$') {
+    $warnings.Add("USER.md lead_writable '$g' names settings, hooks, agent files or PROJECT.md: the guard never allows these"); continue
+  }
+  $literal = ($t -split '[*?]')[0]
+  if ($literal.StartsWith('~')) { $literal = (ConvertTo-SlashPath $HOME).TrimEnd('/') + $literal.Substring(1) }
+  $d = $literal
+  while ($d) {
+    if ([System.IO.Directory]::Exists((Join-Path $d '.git')) -or [System.IO.File]::Exists((Join-Path $d '.git'))) {
+      $warnings.Add("USER.md lead_writable '$g' is inside a git repository: the guard never allows it (code changes go through a PR)"); break
+    }
+    $parent = Split-Path -Parent $d
+    if ([string]::IsNullOrEmpty($parent) -or $parent -eq $d) { break }
+    $d = $parent
+  }
+}
+
 foreach ($w in $warnings) { Write-Output "WARN: $w" }
 if ($problems.Count -eq 0) {
   Write-Output "OK: .claude/team passes ($($active.Count) active agents)."

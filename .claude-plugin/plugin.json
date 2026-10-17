@@ -1,6 +1,6 @@
 {
   "name": "agent-crew",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A reusable, domain-free multi-agent team for Claude Code: lead, thinker, architect, coder, reviewer, scout, plus skills to bootstrap, retro, hire and retire.",
   "author": { "name": "exaltedo2" },
   "license": "MIT",

@@ -4,7 +4,8 @@
   agents inside the places they may write. Block = exit code 2 with the reason on stderr.
 
   - lead: .claude/team/** (also ~/.claude/team/**) and the PROJECT.md `lead_writable` globs,
-    but NEVER PROJECT.md itself, .claude/settings*.json or hook scripts, even if a glob
+    plus files outside the project matching the optional USER.md `lead_writable` globs (never inside a git
+    repository, settings*.json, hooks, agents), but NEVER PROJECT.md itself, .claude/settings*.json or hook scripts, even if a glob
     lists them: those changes go through the coder.
   - thinker, architect, reviewer (and ui-reviewer, security-reviewer, perf-profiler, plus
     PROJECT.md `report_only_agents`): only .claude/team/reports/**.
@@ -99,6 +100,8 @@ try {
       $userTeam = ConvertTo-SlashPath (Resolve-RealPath (Join-Path $userDir 'team'))
       if ($full.StartsWith($userTeam.TrimEnd('/') + '/', [System.StringComparison]::OrdinalIgnoreCase)) { exit 0 }
     }
+    # Personal files the user listed in USER.md `lead_writable` (never settings, hooks, agents, PROJECT.md or git repos).
+    if (Test-UserLeadWritable $realFile) { exit 0 }
   }
   [Console]::Error.WriteLine("agent-crew: the lead may edit only .claude/team/** and the PROJECT.md lead_writable globs (tried: $file). Delegate this change to the coder.")
   exit 2
