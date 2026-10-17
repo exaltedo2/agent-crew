@@ -39,12 +39,17 @@ $leadDenied = @(
   '(^|/)agent-crew/hooks/'
 )
 
+$leadChecking = $false
+$leadMayWrite = 'The lead may write: project .claude/team/** (not PROJECT.md), the PROJECT.md lead_writable globs, ~/.claude/team/reports/**, and the USER.md lead_writable globs. ~/.claude/team/USER.md and ram-guard.json are never writable.'
+
 try {
   $in = ConvertFrom-HookText $rawInput
   if ($null -eq $in) { exit 0 }
 
   $agent = Get-AgentName $in.agent_type
   if (-not $agent) { exit 0 }
+  # From here on, any error while checking the lead denies the write (fail closed); other agents fail open.
+  $leadChecking = ($agent -eq 'lead')
 
   $cwd = [string]$in.cwd
   $root = Find-TeamRoot $cwd
@@ -109,9 +114,13 @@ try {
       exit 2
     }
   }
-  [Console]::Error.WriteLine("agent-crew: the lead may edit only .claude/team/** and the PROJECT.md lead_writable globs (tried: $file). Delegate this change to the coder.")
+  [Console]::Error.WriteLine("agent-crew: the lead may not write $file. $leadMayWrite Delegate this change to the coder.")
   exit 2
 } catch {
-  # A broken hook must never block work.
+  if ($leadChecking) {
+    [Console]::Error.WriteLine("agent-crew: the lead may not write this file (the permission check failed: $($_.Exception.Message)). $leadMayWrite")
+    exit 2
+  }
+  # A broken hook must never block work for the other agents.
   exit 0
 }
