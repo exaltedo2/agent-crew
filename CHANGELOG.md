@@ -10,6 +10,9 @@ the session-start hook says when it differs from the installed one.
   Claude Code run (not part of `tests/run.ps1`, spends real usage).
 - `crew-bootstrap`: a non-interactive path (answers given in the request, or no AskUserQuestion):
   use the given answers, default the rest and say which. Interactive stays the default.
+- `crew-bootstrap` fallback when writes to `.claude/team/` are refused: drafts go to
+  `<project>/crew-bootstrap-drafts/` (named on a `DRAFTS:` line), not the OS temp folder: headless
+  runs refuse temp paths too, so this fixes the real fallback as well as the e2e test.
 
 ## 0.2.1 - 2026-10-17
 
