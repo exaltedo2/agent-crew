@@ -71,9 +71,12 @@ The lead writes the files that are its own (a hook blocks the file-edit tools el
 - no `reports/` or `snapshots/` folder: agents and hooks create them when first needed.
 
 If a write to `.claude/team/` is refused (not approved, or a headless run), do not retry in a
-loop: write every draft to the OS temp folder (or a path the user names) and tell the user the
-exact files and their target paths to approve or copy; or hand the placement to the `coder`
-with the absolute draft paths, as for the files below.
+loop: write every draft to ONE new folder in the OS temp folder (or a path the user names),
+each file under its target name relative to `.claude/team/` (`PROJECT.md`, `routing.md`,
+`roster.md`, `state.md`), including `PROJECT.md` (no `coder` is needed just to park a draft).
+End the reply with a line `DRAFTS: <absolute folder path>` and tell the user the target paths
+to approve or copy; or hand the placement to the `coder` with the absolute draft paths, as for
+the files below.
 
 The lead may NOT write `PROJECT.md`, `.claude/settings.local.json` or `.gitignore`. Instead it
 drafts them into `.claude/team/reports/bootstrap-PROJECT.md`, `bootstrap-settings.local.json`
