@@ -91,3 +91,8 @@ belong in a project's `.claude/team/routing.md` "Learned rules" or `PROJECT.md`,
     unquoted one breaks the whole workflow file and the failure is easy to miss.
 20. **Hooks must fail open.** A broken hook script must never block the user's work; only an
     intentional rule violation exits with code 2.
+21. **New agents, agent allowlists (`tools:`) and skills load only when a session starts.** After
+    installing agent-crew, hiring or retiring an agent, or editing an agent file, restart the
+    session (a resumed session also reloads). Why: a running session keeps the list it started
+    with, so a freshly installed or hired agent, or a newly allowed tool, silently does not exist
+    until then.

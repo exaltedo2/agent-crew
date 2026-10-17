@@ -86,7 +86,7 @@ try {
   $g = $r.Out | ConvertFrom-Json
   Check '-Session filters sessions' ($g.requests -eq 0)
   $r = Invoke-Script $ledger @('-Project', 'C:\fixture\proj', '-ProjectsRoot', $projects, '-MainAgent', 'lead', '-Format', 'md')
-  Check 'markdown output has a table and the main agent name' (($r.Out -match '\| lead \|') -and ($r.Out -match '\*\*Total'))
+  Check 'markdown output has a table and the main agent name' (($r.Out -match '\| lead \|') -and ($r.Out -match 'Share of usage'))
   $r = Invoke-Script $ledger @('-Project', 'C:\fixture\proj', '-ProjectsRoot', $projects)
   Check 'table output runs' (($r.Exit -eq 0) -and ($r.Out -match 'By agent type'))
   $r = Invoke-Script $ledger @('-Project', 'C:\nowhere', '-ProjectsRoot', $projects)
@@ -97,16 +97,43 @@ try {
   $r = Invoke-Script $ledger @('-Project', 'C:\fixture\proj', '-ProjectsRoot', $projects, '-Format', 'json')
   $g = $r.Out | ConvertFrom-Json
   Check 'json output is labelled estimated' ($g.estimated -eq $true)
-  Check 'family-fallback priced models are flagged' (@($g.fallbackPricedModels) -contains 'claude-opus-5-5')
-  Check 'exactly priced models are not flagged' (@($g.fallbackPricedModels) -notcontains 'claude-haiku-4-5-20251001')
+  Check 'a new version of a known family (claude-opus-5-5) gives no warning' ((@($g.unknownModels).Count -eq 0) -and (@($g.warnings | Where-Object { $_ -match 'unknown model family' }).Count -eq 0))
   Check 'a request in a main file and a subagent file is counted once (subagent wins, any read order)' (($g.requests -eq 4) -and (@($g.byAgent | Where-Object { $_.Agent -eq 'bug-hunter' }).Count -eq 1))
   $r = Invoke-Script $ledger @('-Project', 'C:\fixture\proj', '-ProjectsRoot', $projects)
-  Check 'text output has the warning and says estimated' (($r.Out -match 'WARNING: model\(s\) claude-opus-5-5') -and ($r.Out -match 'Total \(estimated\)'))
+  Check 'text output (usage mode) says estimated and has no dollars' (($r.Out -match 'ESTIMATES') -and ($r.Out -notmatch '\$') -and ($r.Out -match 'Share %') -and ($r.Out -match 'share of usage'))
+  $r = Invoke-Script $ledger @('-Project', 'C:\fixture\proj', '-ProjectsRoot', $projects, '-Mode', 'cost')
+  Check 'cost mode shows dollars and the estimated total' (($r.Out -match 'Total \(estimated\): \$') -and ($r.Out -match 'Est\. cost USD') -and ($r.Out -match 'Share %'))
   $r = Invoke-Script $ledger @('-Project', 'C:\fixture\legacy', '-ProjectsRoot', $projects, '-Format', 'json')
   $g = $r.Out | ConvertFrom-Json
   Check 'opus 4.1 at 15/MTok plus opus 4.5 at 5/MTok = 20' ([Math]::Abs($g.totalCostUsd - 20.0) -lt 1e-6) "got $($g.totalCostUsd)"
-  Check 'exactly priced ids give no fallback warning' (@($g.fallbackPricedModels).Count -eq 0)
+  Check 'override-priced ids give no warning' (@($g.unknownModels).Count -eq 0)
   Check 'an unparseable line is counted and warned about' (($g.unparsedLines -eq 1) -and (@($g.warnings | Where-Object { $_ -match 'could not be parsed' }).Count -eq 1))
+
+  # Model families: priced by a whole-word match, new versions never warn, unknown families warn once.
+  $nolocal = Join-Path $Work 'no-such-prices.local.json'
+  $r = Invoke-Script $ledger @('-Project', 'C:\fixture\models', '-ProjectsRoot', $projects, '-Format', 'json', '-LocalPrices', $nolocal)
+  $g = $r.Out | ConvertFrom-Json
+  # opus-5-6 5 + opus alias 5 + sonnet 3.5 style 3 + fable 10 + opus-4-1 override 15 + upper-case haiku 1
+  Check 'families: opus ids and alias, sonnet 3.5 id, fable, override, case-insensitive haiku priced right' ([Math]::Abs($g.totalCostUsd - 39.0) -lt 1e-6) "got $($g.totalCostUsd)"
+  Check 'families: no model warning for known families' ((@($g.unknownModels).Count -eq 0) -and (@($g.warnings | Where-Object { $_ -match 'unknown model family' }).Count -eq 0))
+  Check 'override beats family (opus 4.1 at 15, not 5)' (@($g.rows | Where-Object { $_.Model -eq 'claude-opus-4-1-20250805' })[0].Cost -eq 15)
+  Check 'fable is priced with the fable family' (@($g.rows | Where-Object { $_.Model -eq 'claude-fable-1' })[0].Cost -eq 10)
+  $sum = 0.0; foreach ($x in $g.byAgent) { $sum += $x.Share }
+  Check 'shares of the agent table sum to about 100' ([Math]::Abs($sum - 100.0) -lt 0.1) "got $sum"
+  $sum = 0.0; foreach ($x in $g.rows) { $sum += $x.Share }
+  Check 'shares of the detail table sum to about 100' ([Math]::Abs($sum - 100.0) -lt 0.1) "got $sum"
+
+  $r = Invoke-Script $ledger @('-Project', 'C:\fixture\zephyr', '-ProjectsRoot', $projects, '-Format', 'json', '-LocalPrices', $nolocal)
+  $g = $r.Out | ConvertFrom-Json
+  Check 'unknown family: default price (3+3+5), never fails' (($r.Exit -eq 0) -and ([Math]::Abs($g.totalCostUsd - 11.0) -lt 1e-6)) "got $($g.totalCostUsd)"
+  Check 'unknown family: exactly ONE warning naming the models and how to add the family' ((@($g.warnings | Where-Object { $_ -match 'unknown model family' }).Count -eq 1) -and (@($g.unknownModels).Count -eq 2) -and ($g.warnings[0] -match 'zephyr-1') -and ($g.warnings[0] -match 'prices\.local\.json'))
+  $local = Join-Path $Work 'prices.local.json'
+  [System.IO.File]::WriteAllText($local, '{ "families": { "zephyr": { "match": ["zephyr"], "input": 1.0, "output": 2.0, "cache_write_5m": 1.0, "cache_write_1h": 1.0, "cache_read": 0.1 } } }')
+  $r = Invoke-Script $ledger @('-Project', 'C:\fixture\zephyr', '-ProjectsRoot', $projects, '-Format', 'json', '-LocalPrices', $local)
+  $g = $r.Out | ConvertFrom-Json
+  Check 'local family file: no warning and its price is used (1+1+5)' ((@($g.unknownModels).Count -eq 0) -and ([Math]::Abs($g.totalCostUsd - 7.0) -lt 1e-6)) "got $($g.totalCostUsd) $($g.warnings -join '|')"
+  $r = Invoke-Script $ledger @('-Project', 'C:\fixture\models', '-ProjectsRoot', $projects, '-LocalPrices', $local)
+  Check 'usage mode table: Share % column, no dollar sign' (($r.Out -match 'Share %') -and ($r.Out -notmatch '\$'))
 
   # ------------------------------------------------------------------ check-team
   Section 'check-team.ps1'
@@ -123,6 +150,22 @@ try {
   Check '... reports the multi-line description' ($r.Out -match "'tester': description")
   $r = Invoke-Script $check @('-Project', (Join-Path $Work 'empty'))
   Check 'no .claude/team fails' ($r.Exit -eq 1)
+  # The lead needs Skill in its tools list; the shipped lead.md has it.
+  $leadTools = (Get-Content (Join-Path $Root 'agents\lead.md') | Where-Object { $_ -match '^tools:' } | Select-Object -First 1)
+  Check 'shipped lead.md allows the Skill tool' ($leadTools -match '\bSkill\b')
+  $noSkill = Join-Path $Work 'noskill'
+  Copy-Item -Recurse $ok $noSkill
+  [System.IO.File]::WriteAllText((Join-Path $noSkill 'claude-home\agents\lead.md'), "---`nname: lead`ndescription: Fixture agent lead.`ntools: Read`n---`nBody.`n")
+  $r = Invoke-Script $check @('-Project', $noSkill, '-ClaudeHome', (Join-Path $noSkill 'claude-home'))
+  Check 'a lead without Skill in tools fails' (($r.Exit -eq 1) -and ($r.Out -match 'lacks Skill'))
+  # Model names are free-form: an unavailable model with no fallback only warns, never fails.
+  $mdl = Join-Path $Work 'models'
+  Copy-Item -Recurse $ok $mdl
+  New-Item -ItemType Directory -Force (Join-Path $mdl 'claude-home\team') | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $mdl 'claude-home\team\USER.md'), "- Available models: opus, sonnet`n- Never use:`n")
+  [System.IO.File]::WriteAllText((Join-Path $mdl '.claude\team\routing.md'), "| Job | Model | Effort | Fallback |`n|---|---|---|---|`n| easy | sonnet | low | - |`n| hard | fable | high | opus |`n| odd | zephyr-x | high | - |`n")
+  $r = Invoke-Script $check @('-Project', $mdl, '-ClaudeHome', (Join-Path $mdl 'claude-home'))
+  Check 'unknown model without fallback only warns' (($r.Exit -eq 0) -and ($r.Out -match "WARN: routing.md row 'odd'") -and ($r.Out -notmatch "row 'hard'") -and ($r.Out -notmatch "row 'easy'")) $r.Out
 
   # ------------------------------------------------------------------ hooks
   Section 'hooks'
@@ -242,9 +285,9 @@ try {
   Check 'session-start resume: old marker asks for the retro' ($r.Out -match 'crew-retro' -and $r.Out -match '10 days')
   Set-Content -LiteralPath $marker -Value (Get-Date).ToString('o')
   $proj2 = Join-Path $proj '.claude/team/PROJECT.md'
-  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.1.0', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
+  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.2.0', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
   $r = Start-Hook 'startup'
-  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0\.1\.0')
+  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0.2.0')
   $r = Start-Hook 'startup' (ConvertTo-Slash $Work)
   Check 'session-start without .claude/team is silent' ($r.Out.Trim() -eq '')
 
