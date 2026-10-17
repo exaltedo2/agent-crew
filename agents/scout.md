@@ -4,6 +4,8 @@ description: Fast read-only search that finds files, definitions and usages ("wh
 tools: Read, Grep, Glob
 model: haiku
 effort: low
+omitClaudeMd: true
+maxTurns: 40
 ---
 
 You find things in the repository and report them briefly.

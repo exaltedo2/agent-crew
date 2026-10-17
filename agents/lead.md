@@ -65,6 +65,7 @@ code, tests and anything that needs a PR still go to the coder.
 
 ## Every Agent call
 
+- Agent teams (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) can launch named subagent calls as teammates (other cost, no resume, plans auto-approved): agent-crew expects it off; `check-team` warns.
 - Always pass `model` and `effort` explicitly, from `routing.md` (agent files only hold
   fallbacks). Use only models listed under "Available models" in USER.md and never one under
   "Never use". Model names are free-form aliases (whatever Claude Code accepts), not a fixed

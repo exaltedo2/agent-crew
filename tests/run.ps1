@@ -58,6 +58,9 @@ function Invoke-Check([string[]]$Arguments) {
 
 function ConvertTo-Slash([string]$p) { return $p.Replace('\', '/') }
 
+# Hermetic: the developer's own settings must not leak into check-team's output.
+$envNames = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS', 'CLAUDE_CODE_EFFORT_LEVEL', 'CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE'
+$savedEnv = @{}; foreach ($n in $envNames) { $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n); [Environment]::SetEnvironmentVariable($n, $null) }
 try {
   # ------------------------------------------------------------------ ledger
   Section 'ledger.ps1'
@@ -219,6 +222,30 @@ try {
   $r = Invoke-Check @('-Project', $old, '-ClaudeHome', (Join-Path $old 'claude-home'))
   Check 'USER.md without an available-models list warns instead of skipping silently' (($r.Exit -eq 0) -and ($r.Out -match "WARN: no 'Available models' list"))
 
+  # Env overrides: warn only, from the environment or the env block of a settings file.
+  Check 'check-team: no override variables, no override warning' ($r.Out -notmatch 'CLAUDE_CODE_')
+  $r0 = Invoke-Check @('-Project', $ok, '-ClaudeHome', (Join-Path $ok 'claude-home'))
+  Check 'check-team: clean environment warns about nothing' (($r0.Exit -eq 0) -and ($r0.Out -notmatch 'CLAUDE_CODE_')) $r0.Out
+  $env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1'; $env:CLAUDE_CODE_EFFORT_LEVEL = 'low'; $env:CLAUDE_CODE_SUBAGENT_MODEL = 'haiku'; $env:CLAUDE_CODE_SUBAGENT_MODEL_FORCE = '1'
+  $r1 = Invoke-Check @('-Project', $ok, '-ClaudeHome', (Join-Path $ok 'claude-home'))
+  Check 'check-team: the four variables in the environment each warn, exit stays 0' (($r1.Exit -eq 0) -and ($r1.Out -match 'WARN: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS is set') -and ($r1.Out -match 'WARN: CLAUDE_CODE_EFFORT_LEVEL is set') -and ($r1.Out -match 'WARN: CLAUDE_CODE_SUBAGENT_MODEL is set') -and ($r1.Out -match 'WARN: CLAUDE_CODE_SUBAGENT_MODEL_FORCE is set')) $r1.Out
+  $env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '0'; $env:CLAUDE_CODE_SUBAGENT_MODEL_FORCE = '0'; $env:CLAUDE_CODE_EFFORT_LEVEL = ''; $env:CLAUDE_CODE_SUBAGENT_MODEL = ''
+  $r1 = Invoke-Check @('-Project', $ok, '-ClaudeHome', (Join-Path $ok 'claude-home'))
+  Check 'check-team: teams=0, force=0 and empty values do not warn' ($r1.Out -notmatch 'CLAUDE_CODE_') $r1.Out
+  foreach ($n in $envNames) { [Environment]::SetEnvironmentVariable($n, $null) }
+  $envHome = Join-Path $Work 'envhome'
+  $envProj = Join-Path $Work 'envproj'
+  Copy-Item -Recurse -LiteralPath $ok -Destination $envProj
+  New-Item -ItemType Directory -Force -Path (Join-Path $envHome 'team') | Out-Null
+  Copy-Item (Join-Path $ok 'claude-home\agents') (Join-Path $envHome 'agents') -Recurse
+  [System.IO.File]::WriteAllText((Join-Path $envHome 'settings.json'), '{ "env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" } }')
+  [System.IO.File]::WriteAllText((Join-Path $envProj '.claude\settings.local.json'), '{ "env": { "CLAUDE_CODE_EFFORT_LEVEL": "max", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "0" } }')
+  $r1 = Invoke-Check @('-Project', $envProj, '-ClaudeHome', $envHome)
+  Check 'check-team: the env block of user and project settings is read' (($r1.Exit -eq 0) -and ($r1.Out -match 'WARN: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS is set \(in .*settings\.json') -and ($r1.Out -match 'WARN: CLAUDE_CODE_EFFORT_LEVEL is set \(in .*settings\.local\.json') -and ($r1.Out -notmatch 'SUBAGENT_MODEL')) $r1.Out
+  [System.IO.File]::WriteAllText((Join-Path $envHome 'settings.json'), '{ not json')
+  $r1 = Invoke-Check @('-Project', $envProj, '-ClaudeHome', $envHome)
+  Check 'check-team: an unreadable settings file is ignored without failing' (($r1.Exit -eq 0) -and ($r1.Out -notmatch 'AGENT_TEAMS')) $r1.Out
+
   # ram-guard.json is validated when present: a bad project file fails, a bad user file only warns.
   $rg = Join-Path $Work 'ramcfg'
   Copy-Item -Recurse $ok $rg
@@ -328,6 +355,17 @@ try {
     $allDenied = $true
     foreach ($b in $spots) { if ((Guard 'lead' $b).Exit -ne 2) { $allDenied = $false; Write-Host "    not denied: $b" } }
     Check 'guard C: shell profiles, .ssh, Startup, .gitconfig, PowerShell profile folders are denied under a valid glob' $allDenied
+    # credential spots are denied even under a valid glob
+    SetUserList @("$plainLn/**", "$fh/**")
+    $creds = @("$plainLn/.npmrc", "$plainLn/.aws/credentials", "$plainLn/.config/gh/hosts.yml", "$plainLn/.docker/config.json", "$plainLn/.netrc", "$plainLn/.git-credentials", "$fh/.npmrc", "$fh/.aws/config")
+    $allDenied = $true
+    foreach ($b in $creds) { if ((Guard 'lead' $b).Exit -ne 2) { $allDenied = $false; Write-Host "    not denied: $b" } }
+    Check 'guard C: credential spots (.npmrc, .aws, .config/gh, .docker/config.json, .netrc, .git-credentials) are denied under a valid glob' $allDenied
+    $r = Guard 'lead' "$plainLn/.npmrc"
+    Check 'guard C: ... and an ordinary file next to them still works' ((Guard 'lead' "$plainLn/notes.txt").Exit -eq 0)
+    $r = Guard 'lead' "$pj/src/a.txt"
+    Check 'guard: the deny message lists what the lead may write' (($r.Err -match 'lead_writable') -and ($r.Err -match 'reports') -and ($r.Err -match 'USER\.md and ram-guard\.json are never writable')) $r.Err
+
 
     # D: 8.3 short names
     SetUserList @("$plainLn/**", "$guardTmp/**".Replace('\', '/'))
@@ -339,6 +377,18 @@ try {
     } else {
       Write-Host '  skip guard D: this volume makes no 8.3 short names'
     }
+
+    # G: the project branch fails closed for the lead too (PROJECT.md locked so reading it throws), not for others
+    $lockProj = Join-Path $guardTmp 'lockproj'
+    Copy-Item -Recurse -LiteralPath $ok -Destination $lockProj
+    $lp = ConvertTo-Slash $lockProj
+    $lockFile = [System.IO.File]::Open((Join-Path $lockProj '.claude\team\PROJECT.md'), [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    try {
+      $r = Guard 'lead' "$lp/.claude/team/state.md" $lockProj
+      $rc = Guard 'coder' "$lp/src/a.txt" $lockProj
+      Check 'guard G: an error while checking a lead write in the project denies with a reason' (($r.Exit -eq 2) -and ($r.Err -match 'check failed') -and ($r.Err -match 'may write')) ($r.Exit.ToString() + ' ' + $r.Err)
+      Check 'guard G: ... but a non-lead agent still fails open' ($rc.Exit -eq 0)
+    } finally { $lockFile.Close() }
 
     # F: bare repositories
     SetUserList @("$plainLn/**", "$bareLn/**")
@@ -459,9 +509,9 @@ try {
   Check 'session-start resume: old marker asks for the retro' ($r.Out -match 'crew-retro' -and $r.Out -match '10 days')
   Set-Content -LiteralPath $marker -Value (Get-Date).ToString('o')
   $proj2 = Join-Path $proj '.claude/team/PROJECT.md'
-  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.3.1', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
+  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.3.2', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
   $r = Start-Hook 'startup'
-  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0.3.1')
+  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0.3.2')
   $r = Start-Hook 'startup' (ConvertTo-Slash $Work)
   Check 'session-start without .claude/team is silent' ($r.Out.Trim() -eq '')
 
@@ -658,6 +708,7 @@ try {
   Check 'skills installed' (Test-Path "$home1\skills\crew-retro\SKILL.md")
   Check 'runtime payload installed' ((Test-Path "$home1\agent-crew\hooks\guard-paths.ps1") -and (Test-Path "$home1\agent-crew\hooks\ram-guard.ps1") -and (Test-Path "$home1\agent-crew\data\ram-guard.json") -and (Test-Path "$home1\agent-crew\scripts\ledger.ps1") -and (Test-Path "$home1\agent-crew\VERSION") -and (Test-Path "$home1\agent-crew\installed.json"))
   Check 'USER.md copied when missing' (Test-Path "$home1\team\USER.md")
+  Check 'agents: scout has omitClaudeMd and maxTurns, reviewer has maxTurns (runaway guards)' (((Get-Content -Raw "$Root\agents\scout.md") -match '(?m)^omitClaudeMd: true\r?$') -and ((Get-Content -Raw "$Root\agents\scout.md") -match '(?m)^maxTurns: \d+') -and ((Get-Content -Raw "$Root\agents\reviewer.md") -match '(?m)^maxTurns: \d+'))
   Check 'agents carry no hooks front matter and no tokens (the guard is registered once, in settings.json)' (-not (Select-String -Path "$home1\agents\*.md" -Pattern '^hooks:|@@HOOK' -Quiet))
   Check 'a backup of settings.json was made' (@(Get-ChildItem $home1 -Filter 'settings.json.bak-*').Count -eq 1)
   $s = Get-Content -Raw "$home1\settings.json" | ConvertFrom-Json
@@ -808,6 +859,7 @@ finally {
   Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+foreach ($n in $envNames) { [Environment]::SetEnvironmentVariable($n, $savedEnv[$n]) }
 Write-Host ""
 Write-Host ("{0} passed, {1} failed" -f $script:Passed, $script:Failed)
 if ($script:Failed -gt 0) { exit 1 }

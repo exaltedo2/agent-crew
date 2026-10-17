@@ -58,8 +58,19 @@ names a model that is not in USER.md "Available models" and has no Fallback.
 **Optional models.** `USER.md` lists "Available models" (default `opus, sonnet, haiku`) and
 "Never use". The lead uses only available models; a routing row with an unavailable model uses
 its Fallback column. To enable `fable`: add it to Available models and keep the two optional
-`fable` rows in `routing.md`. **`fable` support is untested by the maintainers**, and its prices
+`fable` rows in `routing.md`. `fable` is an official model alias in Claude Code, but its prices
 in `data/prices.json` are a pure guess: set real ones in `prices.local.json`.
+
+**Settings that override routing.** `CLAUDE_CODE_EFFORT_LEVEL` beats every agent's and every call's effort;
+`CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` beats every model (`CLAUDE_CODE_SUBAGENT_MODEL` alone only fills in
+where nothing else sets a model). **Agent teams:** with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, named
+subagent calls may launch as teammates (different cost, no resume, plans approved automatically). agent-crew
+expects that flag off. `check-team` warns when any of these is set, in the environment or in the `env` block
+of the user or project `settings.json`.
+
+**Agent frontmatter guards.** `scout` has `omitClaudeMd: true` (it only looks things up, so it skips
+CLAUDE.md) and `scout` / `reviewer` have `maxTurns` (40 / 80) as a runaway guard. The two `maxTurns` values
+are guesses: raise them if an agent is cut off on a legitimate task.
 
 ## Install
 
@@ -157,7 +168,7 @@ fail open (a broken hook never blocks work). They read the hook JSON from stdin
 
 | Hook | Event | Does |
 |---|---|---|
-| `guard-paths` | PreToolUse `Edit\|Write\|MultiEdit\|NotebookEdit` | Lead may write only `.claude/team/**` (except `PROJECT.md`) and `~/.claude/team/reports/**` (never USER.md or ram-guard.json there), plus the `lead_writable` globs (never settings, hooks or PROJECT.md) and, outside the project, the optional `lead_writable` list in `~/.claude/team/USER.md` (absolute or `~`-relative globs, e.g. `~/.claude/notes/**`; never settings*.json, hooks, agent files, PROJECT.md, anything inside a git repository (work tree or bare), anything in `~/.claude` except `notes/**`, shell profiles, `.ssh`, Startup folders or `.gitconfig`; relative globs and globs starting at a drive root or the home folder are ignored; 8.3 short names are expanded first; an error while checking denies the write). thinker, architect, reviewer (+ `ui-reviewer`, `security-reviewer`, `perf-profiler`, + `report_only_agents`) may write only `.claude/team/reports/**`. Others unrestricted. Blocks with exit 2 and a reason. |
+| `guard-paths` | PreToolUse `Edit\|Write\|MultiEdit\|NotebookEdit` | Lead may write only `.claude/team/**` (except `PROJECT.md`) and `~/.claude/team/reports/**` (never USER.md or ram-guard.json there), plus the `lead_writable` globs (never settings, hooks or PROJECT.md) and, outside the project, the optional `lead_writable` list in `~/.claude/team/USER.md` (absolute or `~`-relative globs, e.g. `~/.claude/notes/**`; never settings*.json, hooks, agent files, PROJECT.md, anything inside a git repository (work tree or bare), anything in `~/.claude` except `notes/**`, shell profiles, `.ssh`, Startup folders, `.gitconfig` or credential spots (`.npmrc`, `.aws`, `.config/gh`, `.docker/config.json`, `.netrc`, `.git-credentials`); relative globs and globs starting at a drive root or the home folder are ignored; 8.3 short names are expanded first; an error while checking any lead write denies it, and the message lists what the lead may write; other agents fail open). thinker, architect, reviewer (+ `ui-reviewer`, `security-reviewer`, `perf-profiler`, + `report_only_agents`) may write only `.claude/team/reports/**`. Others unrestricted. Blocks with exit 2 and a reason. |
 | `ram-guard` | PreToolUse `Agent\|Task`, and `Bash` / `PowerShell` with an `if` filter such as `Bash(claude *)` | Blocks starting new heavy work (a subagent, or a command matching a configured pattern) while free memory is below that job kind's threshold. Exit 2 and a reason; never kills anything. See [RAM guard](#ram-guard). |
 | `check-caps` | PostToolUse, same matcher | Warns (never blocks) when state/routing/roster are over their cap. |
 | `pre-compact` | PreCompact | Copies `state.md` to `snapshots/`, keeps the newest 5. |
@@ -323,7 +334,7 @@ assuming `main`.
 `templates/settings.local.json` (written by the bootstrap into a project's
 `.claude/settings.local.json`) contains `"agent": "lead"`, `"autoCompactWindow": 350000` and
 `"idleCompaction": true`. JSON has no comments, so here is the explanation: **the two compaction
-values are guesses**, chosen to compact the lead's long context earlier than the default so it
+values are guesses** (both are documented settings), chosen to compact the lead's long context earlier than the default so it
 is re-read fewer times. Tune them against the ledger. `idleCompaction` compacts while a session
 is idle, before the prompt cache expires.
 

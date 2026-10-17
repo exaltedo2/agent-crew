@@ -4,6 +4,18 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## 0.3.2 - 2026-10-17
+
+- Small adoptions from a comparison with Claude Code's own features. `check-team` warns when
+  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_MODEL` or
+  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` is set (environment or `env` block of user/project settings): they override
+  or change routing. README and `lead.md` warn about agent teams. `scout` gets `omitClaudeMd: true`; `scout` and
+  `reviewer` get `maxTurns` 40 / 80 (guesses, runaway guard). README: `fable` is an official alias, compaction
+  settings noted as documented.
+- `guard-paths`: an error while checking a lead write now denies it (it used to allow) with the full list of what
+  the lead may write; other agents still fail open. Credential spots (`.npmrc`, `.aws`, `.config/gh`,
+  `.docker/config.json`, `.netrc`, `.git-credentials`) are never grantable through a user `lead_writable` glob.
+
 ## 0.3.1 - 2026-10-17
 
 - The lead may do small personal edits itself: optional `lead_writable` list (absolute or `~`-relative globs) in
