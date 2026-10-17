@@ -12,6 +12,8 @@
   when they exist. Warns (never fails) when a routing.md row names a model that is missing from the "Available
   models" list of <ClaudeHome>\team\USER.md and has no Fallback. Model names are free-form:
   unknown names are never rejected.
+  Warns when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1, CLAUDE_CODE_EFFORT_LEVEL, CLAUDE_CODE_SUBAGENT_MODEL or
+  CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 is set in the environment or the "env" block of the user/project settings.
 
 .PARAMETER Project     Project folder (default: current folder).
 .PARAMETER ClaudeHome  User-level Claude folder (default: $HOME\.claude).
@@ -180,6 +182,34 @@ foreach ($g in @($userFm['lead_writable'])) {
     if ([string]::IsNullOrEmpty($parent) -or $parent -eq $d) { break }
     $d = $parent
   }
+}
+
+# Settings that silently override the routing (model / effort per Agent call) or change how subagent calls run.
+# Looked up in the process environment and in the "env" block of the user and project settings files. Read only.
+$overrides = [ordered]@{
+  'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS' = @{ Bad = { param($v) $v -eq '1' }; Why = 'named subagent calls may launch as teammates (other cost, no resume, plans auto-approved); agent-crew expects it off' }
+  'CLAUDE_CODE_EFFORT_LEVEL'             = @{ Bad = { param($v) $v -ne '' }; Why = 'it overrides the effort of every agent and every routing row' }
+  'CLAUDE_CODE_SUBAGENT_MODEL'           = @{ Bad = { param($v) $v -ne '' }; Why = 'it replaces the model of subagents that have none set (routing rows pass one, so this mainly changes agent-file defaults)' }
+  'CLAUDE_CODE_SUBAGENT_MODEL_FORCE'     = @{ Bad = { param($v) $v -eq '1' }; Why = 'it overrides the model of every subagent, including every routing row' }
+}
+$settingsFiles = @(
+  (Join-Path $ClaudeHome 'settings.json'),
+  (Join-Path $Project '.claude/settings.json'),
+  (Join-Path $Project '.claude/settings.local.json')
+)
+foreach ($name in $overrides.Keys) {
+  $sources = New-Object System.Collections.Generic.List[string]
+  $envValue = [Environment]::GetEnvironmentVariable($name)
+  if ($null -ne $envValue -and (& $overrides[$name].Bad ([string]$envValue).Trim())) { $sources.Add('the environment') }
+  foreach ($f in $settingsFiles) {
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }
+    try {
+      $json = Get-Content -LiteralPath $f -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      $prop = if ($json -and $json.env) { $json.env.PSObject.Properties[$name] } else { $null }
+      if ($prop -and $null -ne $prop.Value -and (& $overrides[$name].Bad ([string]$prop.Value).Trim())) { $sources.Add($f) }
+    } catch { }
+  }
+  if ($sources.Count -gt 0) { $warnings.Add("$name is set (in $($sources -join ', ')): $($overrides[$name].Why).") }
 }
 
 foreach ($w in $warnings) { Write-Output "WARN: $w" }

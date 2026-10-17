@@ -97,7 +97,10 @@ function Test-UserLeadDeniedPath {
   if ($p -match '(?i)(^|/)\.claude\.json$') { return $true }
   # Shell profiles, ssh, startup folders, git config: files that run code or hold keys.
   if ($p -match '(?i)(^|/)(\.ssh|WindowsPowerShell|PowerShell|startup)(/|$)') { return $true }
-  if ($p -match '(?i)(^|/)\.config/(powershell|git)(/|$)') { return $true }
+  if ($p -match '(?i)(^|/)\.config/(powershell|git|gh)(/|$)') { return $true }
+  # Credential stores: tokens and passwords, never a place for the lead's personal edits.
+  if ($p -match '(?i)(^|/)(\.aws|\.netrc|\.npmrc|\.git-credentials)(/|$)') { return $true }
+  if ($p -match '(?i)(^|/)\.docker/config\.json$') { return $true }
   if ($p -match '(?i)(^|/)\.(bashrc|bash_profile|bash_login|bash_logout|zshrc|zshenv|zprofile|zlogin|profile|gitconfig|inputrc)$') { return $true }
   if ($p -match '(?i)(^|/)[^/]*profile\.ps1$') { return $true }
   foreach ($d in (Get-UserClaudeSlashDirs)) {
