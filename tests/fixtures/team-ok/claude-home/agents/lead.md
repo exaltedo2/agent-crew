@@ -1,7 +1,7 @@
 ---
 name: lead
 description: Fixture agent lead.
-tools: Read
+tools: Read, Skill
 model: sonnet
 ---
 Body.
