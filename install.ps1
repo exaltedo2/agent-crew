@@ -41,6 +41,7 @@ $Utf8 = New-Object System.Text.UTF8Encoding($false)
 # event -> list of @{ matcher; script }
 $HookPlan = @(
   @{ Event = 'PreToolUse';   Matcher = 'Edit|Write|MultiEdit|NotebookEdit'; Script = 'guard-paths' },
+  @{ Event = 'PreToolUse';   Matcher = 'Agent|Task|Bash|PowerShell'; Script = 'ram-guard' },
   @{ Event = 'PostToolUse';  Matcher = 'Edit|Write|MultiEdit|NotebookEdit'; Script = 'check-caps' },
   @{ Event = 'PreCompact';   Matcher = $null; Script = 'pre-compact' },
   @{ Event = 'PostCompact';  Matcher = $null; Script = 'post-compact' },

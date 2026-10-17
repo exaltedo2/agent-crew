@@ -1,0 +1,17 @@
+{
+  "status": "GUESS: every number in this file is an untested guess, tune it for your machine",
+  "note": "RAM guard defaults. Merge order: this file < ~/.claude/team/ram-guard.json < <project>/.claude/team/ram-guard.json. A later file replaces a kind of the same name field by field (min_free_mb, patterns, tools, enabled) and may add new kinds. 'enabled': false at the top level switches the whole guard off; per kind it switches that kind off. A kind needs 'min_free_mb' (a number above 0) and either 'tools' containing Agent/Task, or 'patterns' (regular expressions, case-insensitive, matched against the Bash/PowerShell command; 'tools' then defaults to Bash and PowerShell). The guard blocks a new call when the free physical memory (available memory: free plus cache that can be dropped) is below 'min_free_mb' of the matching kind (the highest one if several match). It never kills anything.",
+  "enabled": true,
+  "kinds": {
+    "agent-spawn": {
+      "description": "Starting a subagent (each one is a separate model session plus its tools)",
+      "tools": ["Agent", "Task"],
+      "min_free_mb": 1500
+    },
+    "claude-headless": {
+      "description": "A headless Claude Code run started from the shell (claude -p / --print)",
+      "patterns": ["(^|[\\s;&|(\"'])claude(\\.exe|\\.cmd)?\\s+(.*\\s)?(-p|--print)(\\s|$)"],
+      "min_free_mb": 2500
+    }
+  }
+}

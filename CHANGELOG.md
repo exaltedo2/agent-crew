@@ -4,6 +4,18 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## 0.3.0 - 2026-10-17
+
+- New hook `ram-guard` (PreToolUse `Agent|Task|Bash|PowerShell`): blocks starting new work when
+  free physical memory is below the threshold of that kind of job; never kills anything. Defaults in
+  `data/ram-guard.json` (subagent spawn 1500 MB, headless `claude` 2500 MB: guesses), overridden by
+  `~/.claude/team/ram-guard.json` and `<project>/.claude/team/ram-guard.json` (plugin < user <
+  project); `"enabled": false` switches it off. Fails open on a bad config or unreadable memory.
+- The installers register the new hook (six hook entries now); `lead.md` says what to do on a block;
+  `check-team` validates the `ram-guard.json` files. See the README section "RAM guard".
+- `crew-common.ps1`: `Find-TeamRoot` and `Get-UserClaudeDirs` use .NET file checks instead of
+  `Test-Path` (the first `Test-Path` call costs about 50 ms in Windows PowerShell).
+
 ## 0.2.2 - 2026-10-17
 
 - `tests/e2e-bootstrap.ps1`: opt-in end-to-end test of `crew-bootstrap` with a real headless

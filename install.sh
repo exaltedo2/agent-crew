@@ -69,6 +69,7 @@ settings_edit() { # $1 = install | uninstall
 import json, os, re, shutil, sys, time
 crew, path, mode = os.environ["CREW_DIR"], os.environ["SETTINGS_PATH"], os.environ["MODE"]
 plan = [("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", "guard-paths"),
+        ("PreToolUse", "Agent|Task|Bash|PowerShell", "ram-guard"),
         ("PostToolUse", "Edit|Write|MultiEdit|NotebookEdit", "check-caps"),
         ("PreCompact", None, "pre-compact"), ("PostCompact", None, "post-compact"),
         ("SessionStart", None, "session-start")]
