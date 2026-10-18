@@ -509,11 +509,42 @@ try {
   Check 'session-start resume: old marker asks for the retro' ($r.Out -match 'crew-retro' -and $r.Out -match '10 days')
   Set-Content -LiteralPath $marker -Value (Get-Date).ToString('o')
   $proj2 = Join-Path $proj '.claude/team/PROJECT.md'
-  (Get-Content -Raw $proj2) -replace 'agent_crew_version: 0.3.2', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
+  (Get-Content -Raw $proj2) -replace 'agent_crew_version: \S+', 'agent_crew_version: 0.0.1' | Set-Content -LiteralPath $proj2 -NoNewline
   $r = Start-Hook 'startup'
-  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match '0.3.2')
+  Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match [regex]::Escape((Get-Content -Raw (Join-Path $Root 'VERSION')).Trim()))
   $r = Start-Hook 'startup' (ConvertTo-Slash $Work)
   Check 'session-start without .claude/team is silent' ($r.Out.Trim() -eq '')
+
+  # no-session-links: hermetic (user folder faked, message files in the work folder)
+  $nslHook = Join-Path $hooks 'no-session-links.ps1'
+  $nslUser = Join-Path $Work 'nsl-user'
+  New-Item -ItemType Directory -Path "$nslUser\team" -Force | Out-Null
+  $nslDir = Join-Path $Work 'nsl-files'
+  New-Item -ItemType Directory -Path $nslDir -Force | Out-Null
+  $trailer = 'Claude-' + 'Session: https://claude.ai/code/' + 'session_abc'
+  [System.IO.File]::WriteAllText("$nslDir\bad.txt", "Fix`n`n$trailer`n")
+  [System.IO.File]::WriteAllText("$nslDir\good.txt", "Fix`n`nCo-Authored-By: someone`n")
+  function Nsl([string]$Command, [string]$Tool = 'Bash') {
+    $env:AGENT_CREW_USER_DIR = $nslUser
+    $json = @{ cwd = (ConvertTo-Slash $nslDir); hook_event_name = 'PreToolUse'; tool_name = $Tool; tool_input = @{ command = $Command } } | ConvertTo-Json -Compress
+    $r = Invoke-Script $nslHook @() $json
+    Remove-Item Env:\AGENT_CREW_USER_DIR -ErrorAction SilentlyContinue
+    return $r
+  }
+  $r = Nsl "git commit -m 'Fix`n`n$trailer'"
+  Check 'no-session-links: a trailer in -m is denied with a message' (($r.Exit -eq 2) -and ($r.Err -match 'session link') -and ($r.Err -match 'allow_session_links')) $r.Err
+  Check 'no-session-links: a session URL in a PR body is denied (PowerShell too)' ((Nsl 'gh pr create --body "see https://claude.ai/code/session_x"' 'PowerShell').Exit -eq 2)
+  Check 'no-session-links: a clean commit is allowed' ((Nsl "git commit -m 'Fix thing'").Exit -eq 0)
+  Check 'no-session-links: the claude.com/claude-code footer is allowed' ((Nsl 'gh pr create --body "Generated with [Claude Code](https://claude.com/claude-code)"').Exit -eq 0)
+  $r = Nsl 'git commit -F bad.txt'
+  Check 'no-session-links: a trailer in a -F file (relative to cwd) is denied' (($r.Exit -eq 2) -and ($r.Err -match 'bad\.txt')) $r.Err
+  Check 'no-session-links: --body-file and --file with a bad file are denied' (((Nsl 'gh pr edit 3 --body-file bad.txt').Exit -eq 2) -and ((Nsl 'git commit --file=bad.txt').Exit -eq 2))
+  Check 'no-session-links: a clean file, a missing file and stdin (-F -) are allowed' (((Nsl 'git commit -F good.txt').Exit -eq 0) -and ((Nsl 'git commit -F nope.txt').Exit -eq 0) -and ((Nsl 'git commit -F -').Exit -eq 0))
+  Check 'no-session-links: invalid or empty stdin fails open' (((Invoke-Script $nslHook @() 'not json').Exit -eq 0) -and ((Invoke-Script $nslHook @() '').Exit -eq 0))
+  [System.IO.File]::WriteAllText("$nslUser\team\USER.md", "---`nallow_session_links: true`n---`nbody`n")
+  Check 'no-session-links: allow_session_links: true in USER.md allows it' ((Nsl 'git commit -F bad.txt').Exit -eq 0)
+  [System.IO.File]::WriteAllText("$nslUser\team\USER.md", "---`nallow_session_links: false`n---`n")
+  Check 'no-session-links: allow_session_links: false still denies' ((Nsl 'git commit -F bad.txt').Exit -eq 2)
 
   # ram-guard: free memory is faked with AGENT_CREW_FREE_MB, the user's Claude folder with AGENT_CREW_USER_DIR
   # and the temp folder (warn-once markers) is redirected, so nothing here reads the real ~/.claude.
@@ -723,6 +754,8 @@ try {
   foreach ($rule in 'Bash(claude *)', 'Bash(claude.exe *)', 'PowerShell(claude *)', 'PowerShell(claude.cmd *)') {
     Check "settings: ram-guard shell entry filtered with if = $rule" (@($ramHooks | Where-Object { $_.hooks[0].PSObject.Properties['if'] -and $_.hooks[0].if -eq $rule -and $_.matcher -eq $rule.Split('(')[0] }).Count -eq 1)
   }
+  $nslHooks = @(@($s.hooks.PreToolUse) | Where-Object { $_.hooks[0].command -match 'no-session-links\.ps1' })
+  Check 'settings: no-session-links has 12 if-filtered Bash and PowerShell entries, none unconditional' (($nslHooks.Count -eq 12) -and (@($nslHooks | Where-Object { -not $_.hooks[0].PSObject.Properties['if'] }).Count -eq 0) -and (@($nslHooks | Where-Object { $_.hooks[0].if -eq 'Bash(git commit*)' }).Count -eq 1) -and (@($nslHooks | Where-Object { $_.hooks[0].if -eq 'PowerShell(gh issue*)' }).Count -eq 1))
   Check 'settings: no unconditional ram-guard entry for every shell command' (@($ramHooks | Where-Object { $_.matcher -match 'Bash' -and -not $_.hooks[0].PSObject.Properties['if'] }).Count -eq 0)
   $before = Get-Content -Raw "$home1\settings.json"
   $r = Invoke-Script $install @('-ClaudeHome', $home1)

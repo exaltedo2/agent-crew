@@ -1,5 +1,5 @@
 ---
-agent_crew_version: 0.3.2
+agent_crew_version: 0.4.1
 lead_writable:
   - docs/ROADMAP.md
   - ".claude/settings.local.json"
