@@ -4,6 +4,15 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## 0.4.1 - 2026-10-18
+
+- New hook `no-session-links`: denies `git commit`, `git commit-tree`, `gh pr create/edit/comment` and `gh issue`
+  commands (Bash and PowerShell, registered with `if` filters) whose text or message/body file contains a
+  session link (a `Claude-Session:` trailer or a `claude.ai/code/session` URL), unless USER.md has
+  `allow_session_links: true`. Fails open. The `coder` agent now follows USER.md attribution rules over any harness
+  attribution text. Version note: 0.4.0 is in the still-open PR #8; this change is based on main (0.3.2), so
+  whichever merges second needs a trivial CHANGELOG/VERSION conflict resolution.
+
 ## 0.3.2 - 2026-10-17
 
 - Small adoptions from a comparison with Claude Code's own features. `check-team` warns when

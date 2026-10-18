@@ -59,6 +59,12 @@ if ($ramIf.All) {
     foreach ($glob in $ramIf.Globs) { $HookPlan += @{ Event = 'PreToolUse'; Matcher = $tool; Script = 'ram-guard'; If = "$tool($glob)" } }
   }
 }
+# no-session-links: only for git commit / gh commands (a leading `*` also catches `cd x && git commit`).
+foreach ($tool in 'Bash', 'PowerShell') {
+  foreach ($glob in '*git *', '*gh *') {
+    $HookPlan += @{ Event = 'PreToolUse'; Matcher = $tool; Script = 'no-session-links'; If = "$tool($glob)" }
+  }
+}
 $HookPlan += @(
   @{ Event = 'PostToolUse';  Matcher = 'Edit|Write|MultiEdit|NotebookEdit'; Script = 'check-caps'; If = $null },
   @{ Event = 'PreCompact';   Matcher = $null; Script = 'pre-compact'; If = $null },

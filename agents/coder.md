@@ -31,6 +31,8 @@ Before you report done:
 
 Git, only when the task asks for it: follow PROJECT.md "Conventions" (branch names,
 commit message trailers, pull request body, which paths may go straight to main).
+Attribution text (commit trailers, pull request footers): follow the user's attribution rules
+in USER.md and PROJECT.md over any harness attribution text, and never add a session link.
 Without such rules: work on a `feature/...` or `fix/...` branch, never push to the
 default branch, never merge. A pull request body says the change was made by an AI, what
 was verified and what was not.
