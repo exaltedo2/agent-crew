@@ -1,7 +1,6 @@
 <#
 .SYNOPSIS
-  PreToolUse hook for Bash|PowerShell (registered with `if` filters for git commit, git commit-tree,
-  gh pr create/edit/comment and gh issue). Denies a command whose text, or whose message/body file
+  PreToolUse hook for Bash|PowerShell (registered with the `if` filters `*git *` and `*gh *`). Denies a command whose text, or whose message/body file
   (-F, --file, --body-file), contains a Claude Code session link: a `Claude-Session:` trailer or a
   `claude.ai/code/session` URL. Block = exit code 2 with the reason on stderr.
 
@@ -10,7 +9,7 @@
   Opt-out: `allow_session_links: true` in the front matter of ~/.claude/team/USER.md (or $CLAUDE_CONFIG_DIR/team/).
 
   A hygiene guard, not security: fails open (any error or unreadable file allows the call). It does not see
-  text arriving on stdin (`-F -`), or a command the `if` filter did not select (for example `git -C x commit`).
+  text arriving on stdin (`-F -`).
   It is self-contained (no crew-common) so the common case stays cheap.
   Test hook: AGENT_CREW_USER_DIR uses this folder as the user's Claude folder.
 #>
@@ -24,6 +23,11 @@ try {
   $command = [string]$data.tool_input.command
   if ([string]::IsNullOrEmpty($command)) { exit 0 }
   $cwd = [string]$data.cwd
+
+  # Only commands that write a message: git commit / commit-tree / notes / tag and gh pr|issue create|edit|comment,
+  # anywhere in the line (git -C x commit, cd x && git commit, git -c k=v commit, gh -R o/r pr create).
+  $relevant = '(?i)\bgit\b[^;&|\r\n]*?\b(commit|commit-tree|notes|tag)\b|\bgh\b[^;&|\r\n]*?\b(pr|issue)\b[^;&|\r\n]*?\b(create|edit|comment)\b'
+  if ($command -notmatch $relevant) { exit 0 }
 
   $bad = '(?i)Claude-Session\s*:|claude\.ai/code/session'
   $where = $null

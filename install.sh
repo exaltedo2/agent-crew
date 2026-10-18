@@ -93,7 +93,7 @@ else:
     for tool in ("Bash", "PowerShell"):
         for g in globs: plan.append(("PreToolUse", tool, "ram-guard", "%s(%s)" % (tool, g)))
 for tool in ("Bash", "PowerShell"):
-    for g in ("git commit*", "git commit-tree*", "gh pr create*", "gh pr edit*", "gh pr comment*", "gh issue*"):
+    for g in ("*git *", "*gh *"):
         plan.append(("PreToolUse", tool, "no-session-links", "%s(%s)" % (tool, g)))
 plan += [("PostToolUse", "Edit|Write|MultiEdit|NotebookEdit", "check-caps", None),
          ("PreCompact", None, "pre-compact", None), ("PostCompact", None, "post-compact", None),

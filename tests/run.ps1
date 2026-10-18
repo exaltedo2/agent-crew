@@ -538,6 +538,8 @@ try {
   Check 'no-session-links: the claude.com/claude-code footer is allowed' ((Nsl 'gh pr create --body "Generated with [Claude Code](https://claude.com/claude-code)"').Exit -eq 0)
   $r = Nsl 'git commit -F bad.txt'
   Check 'no-session-links: a trailer in a -F file (relative to cwd) is denied' (($r.Exit -eq 2) -and ($r.Err -match 'bad\.txt')) $r.Err
+  Check 'no-session-links: other forms are denied: git -C, cd && git, git -c, gh -R, tag, notes, commit-tree' (((Nsl "git -C ../x commit -m '$trailer'").Exit -eq 2) -and ((Nsl "cd x && git commit -m '$trailer'").Exit -eq 2) -and ((Nsl "git -c user.name=a commit -m '$trailer'").Exit -eq 2) -and ((Nsl "gh -R o/r pr create --body '$trailer'").Exit -eq 2) -and ((Nsl "ls; gh issue comment 4 -b '$trailer'").Exit -eq 2) -and ((Nsl "git tag -a v1 -m '$trailer'").Exit -eq 2) -and ((Nsl "git notes add -m '$trailer'").Exit -eq 2) -and ((Nsl "git commit-tree HEAD^{tree} -m '$trailer'").Exit -eq 2))
+  Check 'no-session-links: a non-message command that merely contains the text is ignored' (((Nsl "echo '$trailer'").Exit -eq 0) -and ((Nsl "git log --grep='$trailer'").Exit -eq 0))
   Check 'no-session-links: --body-file and --file with a bad file are denied' (((Nsl 'gh pr edit 3 --body-file bad.txt').Exit -eq 2) -and ((Nsl 'git commit --file=bad.txt').Exit -eq 2))
   Check 'no-session-links: a clean file, a missing file and stdin (-F -) are allowed' (((Nsl 'git commit -F good.txt').Exit -eq 0) -and ((Nsl 'git commit -F nope.txt').Exit -eq 0) -and ((Nsl 'git commit -F -').Exit -eq 0))
   Check 'no-session-links: invalid or empty stdin fails open' (((Invoke-Script $nslHook @() 'not json').Exit -eq 0) -and ((Invoke-Script $nslHook @() '').Exit -eq 0))
@@ -755,7 +757,7 @@ try {
     Check "settings: ram-guard shell entry filtered with if = $rule" (@($ramHooks | Where-Object { $_.hooks[0].PSObject.Properties['if'] -and $_.hooks[0].if -eq $rule -and $_.matcher -eq $rule.Split('(')[0] }).Count -eq 1)
   }
   $nslHooks = @(@($s.hooks.PreToolUse) | Where-Object { $_.hooks[0].command -match 'no-session-links\.ps1' })
-  Check 'settings: no-session-links has 12 if-filtered Bash and PowerShell entries, none unconditional' (($nslHooks.Count -eq 12) -and (@($nslHooks | Where-Object { -not $_.hooks[0].PSObject.Properties['if'] }).Count -eq 0) -and (@($nslHooks | Where-Object { $_.hooks[0].if -eq 'Bash(git commit*)' }).Count -eq 1) -and (@($nslHooks | Where-Object { $_.hooks[0].if -eq 'PowerShell(gh issue*)' }).Count -eq 1))
+  Check 'settings: no-session-links has 4 if-filtered Bash and PowerShell entries, none unconditional' (($nslHooks.Count -eq 4) -and (@($nslHooks | Where-Object { -not $_.hooks[0].PSObject.Properties['if'] }).Count -eq 0) -and (@($nslHooks | Where-Object { $_.hooks[0].if -eq 'Bash(*git *)' }).Count -eq 1) -and (@($nslHooks | Where-Object { $_.hooks[0].if -eq 'PowerShell(*gh *)' }).Count -eq 1))
   Check 'settings: no unconditional ram-guard entry for every shell command' (@($ramHooks | Where-Object { $_.matcher -match 'Bash' -and -not $_.hooks[0].PSObject.Properties['if'] }).Count -eq 0)
   $before = Get-Content -Raw "$home1\settings.json"
   $r = Invoke-Script $install @('-ClaudeHome', $home1)

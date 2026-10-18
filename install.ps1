@@ -59,9 +59,9 @@ if ($ramIf.All) {
     foreach ($glob in $ramIf.Globs) { $HookPlan += @{ Event = 'PreToolUse'; Matcher = $tool; Script = 'ram-guard'; If = "$tool($glob)" } }
   }
 }
-# no-session-links: only for git commit / gh commands (a `git commit*` call is the only one that starts it).
+# no-session-links: only for git commit / gh commands (a leading `*` also catches `cd x && git commit`).
 foreach ($tool in 'Bash', 'PowerShell') {
-  foreach ($glob in 'git commit*', 'git commit-tree*', 'gh pr create*', 'gh pr edit*', 'gh pr comment*', 'gh issue*') {
+  foreach ($glob in '*git *', '*gh *') {
     $HookPlan += @{ Event = 'PreToolUse'; Matcher = $tool; Script = 'no-session-links'; If = "$tool($glob)" }
   }
 }
