@@ -59,7 +59,7 @@ function Invoke-Check([string[]]$Arguments) {
 function ConvertTo-Slash([string]$p) { return $p.Replace('\', '/') }
 
 # Hermetic: the developer's own settings must not leak into check-team's output.
-$envNames = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS', 'CLAUDE_CODE_EFFORT_LEVEL', 'CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE'
+$envNames = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS', 'CLAUDE_CODE_EFFORT_LEVEL', 'CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'
 $savedEnv = @{}; foreach ($n in $envNames) { $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n); [Environment]::SetEnvironmentVariable($n, $null) }
 try {
   # ------------------------------------------------------------------ ledger
@@ -245,6 +245,50 @@ try {
   [System.IO.File]::WriteAllText((Join-Path $envHome 'settings.json'), '{ not json')
   $r1 = Invoke-Check @('-Project', $envProj, '-ClaudeHome', $envHome)
   Check 'check-team: an unreadable settings file is ignored without failing' (($r1.Exit -eq 0) -and ($r1.Out -notmatch 'AGENT_TEAMS')) $r1.Out
+
+  # Lead compact window (check-team): session.json vs settings, overrides, idle compaction.
+  $cw = Join-Path $Work 'cwproj'
+  $cwHome = Join-Path $Work 'cwhome'
+  Copy-Item -Recurse -LiteralPath $ok -Destination $cw
+  New-Item -ItemType Directory -Force -Path (Join-Path $cwHome 'team') | Out-Null
+  Copy-Item (Join-Path $ok 'claude-home\agents') (Join-Path $cwHome 'agents') -Recurse
+  $sj = Join-Path $cw '.claude\team\session.json'
+  $r1 = Invoke-Check @('-Project', $cw, '-ClaudeHome', $cwHome)
+  Check 'check-team: no session.json: INFO says the lead should create it, no warning' (($r1.Exit -eq 0) -and ($r1.Out -match 'INFO: no session\.json: the lead should create it') -and ($r1.Out -notmatch 'WARN')) $r1.Out
+  [System.IO.File]::WriteAllText($sj, '{ "lead_compact_window": 200000, "reason": "t" }')
+  $r1 = Invoke-Check @('-Project', $cw, '-ClaudeHome', $cwHome)
+  Check 'check-team: session.json not yet applied is reported as INFO' (($r1.Exit -eq 0) -and ($r1.Out -match 'INFO: lead compact window: session\.json says 200000') -and ($r1.Out -notmatch 'WARN')) $r1.Out
+  [System.IO.File]::WriteAllText((Join-Path $cw '.claude\settings.local.json'), '{ "autoCompactWindow": 200000 }')
+  $r1 = Invoke-Check @('-Project', $cw, '-ClaudeHome', $cwHome)
+  Check 'check-team: equal local setting: INFO names the winning file, no warning' (($r1.Exit -eq 0) -and ($r1.Out -match 'INFO: lead compact window: 200000 in effect from .*settings\.local\.json') -and ($r1.Out -notmatch 'WARN')) $r1.Out
+  [System.IO.File]::WriteAllText((Join-Path $cw '.claude\settings.local.json'), '{ "autoCompactWindow": 350000 }')
+  [System.IO.File]::WriteAllText((Join-Path $cw '.claude\settings.json'), '{ "autoCompactWindow": 250000 }')
+  $r1 = Invoke-Check @('-Project', $cw, '-ClaudeHome', $cwHome)
+  Check 'check-team: differing local setting and project setting are named, local wins' (($r1.Exit -eq 0) -and ($r1.Out -match 'session\.json says 200000 but autoCompactWindow in .*settings\.local\.json is 350000') -and ($r1.Out -match 'the local file wins') -and ($r1.Out -match 'INFO: lead compact window: 350000 in effect from .*settings\.local\.json')) $r1.Out
+  Remove-Item (Join-Path $cw '.claude\settings.local.json')
+  $r1 = Invoke-Check @('-Project', $cw, '-ClaudeHome', $cwHome)
+  Check 'check-team: project settings.json value differing from session.json warns' (($r1.Exit -eq 0) -and ($r1.Out -match 'autoCompactWindow in .*settings\.json is 250000') -and ($r1.Out -match 'INFO: lead compact window: 250000 in effect from .*settings\.json')) $r1.Out
+  [System.IO.File]::WriteAllText((Join-Path $cwHome 'settings.json'), '{ "modelSettings": { "opus": { "autoCompactWindow": 300000 } }, "idleCompaction": false }')
+  $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = '150000'
+  $r1 = Invoke-Check @('-Project', $cw, '-ClaudeHome', $cwHome)
+  Remove-Item Env:\CLAUDE_CODE_AUTO_COMPACT_WINDOW
+  Check 'check-team: env var, modelSettings and idleCompaction=false each warn and win' (($r1.Exit -eq 0) -and ($r1.Out -match "higher-priority setting wins") -and ($r1.Out -match 'CLAUDE_CODE_AUTO_COMPACT_WINDOW \(150000\)') -and ($r1.Out -match 'modelSettings\.opus\.autoCompactWindow \(300000\)') -and ($r1.Out -match 'idleCompaction is false')) $r1.Out
+  Remove-Item Env:\AGENT_CREW_MANAGED_SETTINGS -ErrorAction SilentlyContinue
+  $mg = Join-Path $Work 'managed-settings.json'
+  [System.IO.File]::WriteAllText($mg, '{ "autoCompactWindow": 123000 }')
+  $env:AGENT_CREW_MANAGED_SETTINGS = $mg
+  $r1 = Invoke-Check @('-Project', $cw, '-ClaudeHome', (Join-Path $Work 'no-such-home'))
+  Remove-Item Env:\AGENT_CREW_MANAGED_SETTINGS
+  Check 'check-team: managed settings are named as the winner' (($r1.Out -match 'higher-priority setting wins') -and ($r1.Out -match 'managed settings .*managed-settings\.json')) $r1.Out
+  [System.IO.File]::WriteAllText((Join-Path $cwHome 'settings.json'), '{ "autoCompactWindow": 111000 }')
+  $r1 = Invoke-Check @('-Project', $cw, '-ClaudeHome', $cwHome)
+  Check 'check-team: a user top-level key is not an override and does not beat the project value' (($r1.Out -notmatch 'higher-priority') -and ($r1.Out -match 'INFO: lead compact window: 250000 in effect from .*settings\.json')) $r1.Out
+  [System.IO.File]::WriteAllText($sj, '{ "lead_compact_window": "big" }')
+  $r1 = Invoke-Check @('-Project', $cw, '-ClaudeHome', $cwHome)
+  Check 'check-team: an invalid session.json warns' (($r1.Exit -eq 0) -and ($r1.Out -match 'WARN: session\.json is unusable')) $r1.Out
+  [System.IO.File]::WriteAllText($sj, '{ "lead_compact_window": 900000 }')
+  $r1 = Invoke-Check @('-Project', $cw, '-ClaudeHome', (Join-Path $Work 'no-such-home'))
+  Check 'check-team: an out-of-range session.json value is reported as clamped' (($r1.Out -match 'outside 100000-400000; the hook uses 400000')) $r1.Out
 
   # ram-guard.json is validated when present: a bad project file fails, a bad user file only warns.
   $rg = Join-Path $Work 'ramcfg'
@@ -514,6 +558,116 @@ try {
   Check 'session-start: version mismatch is reported' ($r.Out -match '0\.0\.1' -and $r.Out -match [regex]::Escape((Get-Content -Raw (Join-Path $Root 'VERSION')).Trim()))
   $r = Start-Hook 'startup' (ConvertTo-Slash $Work)
   Check 'session-start without .claude/team is silent' ($r.Out.Trim() -eq '')
+
+  # session-start applies .claude/team/session.json to the project settings.local.json (user dirs are faked).
+  $cwp = Join-Path $Work 'cwhook'
+  $cwFake = Join-Path $Work 'cwhookhome'
+  Copy-Item -Recurse -LiteralPath $ok -Destination $cwp
+  New-Item -ItemType Directory -Force -Path (Join-Path $cwFake '.claude') | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $cwp '.claude\team\.last-retro'), (Get-Date).ToString('o'))
+  $cwSj = Join-Path $cwp '.claude\team\session.json'
+  $cwSet = Join-Path $cwp '.claude\settings.local.json'
+  $cwSaved = @{ H = $env:HOME; U = $env:USERPROFILE; C = $env:CLAUDE_CONFIG_DIR }
+  $env:HOME = $cwFake; $env:USERPROFILE = $cwFake; $env:CLAUDE_CONFIG_DIR = $null
+  try {
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    Check 'compact window: no session.json, nothing printed and no settings file' (($r.Out.Trim() -eq '') -and -not (Test-Path -LiteralPath $cwSet)) $r.Out
+    [System.IO.File]::WriteAllText($cwSj, '{ "lead_compact_window": 220000, "reason": "long design talks" }')
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    $v = (Get-Content -Raw -LiteralPath $cwSet | ConvertFrom-Json)
+    Check 'compact window: creates settings.local.json with only the key and says so' (($v.autoCompactWindow -eq 220000) -and (@($v.PSObject.Properties).Count -eq 1) -and ($r.Out -match 'set to 220000') -and ($r.Out -match 'long design talks') -and ($r.Out -match 'next session')) $r.Out
+    $stamp = (Get-Item -LiteralPath $cwSet).LastWriteTimeUtc
+    Start-Sleep -Milliseconds 1100
+    $r = Start-Hook 'resume' (ConvertTo-Slash $cwp)
+    Check 'compact window: unchanged value prints nothing and does not rewrite the file' (($r.Out.Trim() -eq '') -and ((Get-Item -LiteralPath $cwSet).LastWriteTimeUtc -eq $stamp)) $r.Out
+    [System.IO.File]::WriteAllText($cwSet, '{ "agent": "lead", "idleCompaction": true, "permissions": { "allow": ["Bash(ls)"] }, "autoCompactWindow": 350000 }')
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    $v = (Get-Content -Raw -LiteralPath $cwSet | ConvertFrom-Json)
+    Check 'compact window: changes only its key and keeps every other one' (($v.autoCompactWindow -eq 220000) -and ($v.agent -eq 'lead') -and ($v.idleCompaction -eq $true) -and ($v.permissions.allow[0] -eq 'Bash(ls)') -and ($r.Out -match 'set to 220000')) $r.Out
+    [System.IO.File]::WriteAllText($cwSj, '{ "lead_compact_window": 50000 }')
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    $v = (Get-Content -Raw -LiteralPath $cwSet | ConvertFrom-Json)
+    Check 'compact window: clamps to the minimum and says so' (($v.autoCompactWindow -eq 100000) -and ($r.Out -match 'clamped')) $r.Out
+    [System.IO.File]::WriteAllText($cwSj, '{ "lead_compact_window": 220000 }')
+    [System.IO.File]::WriteAllText($cwSet, '{ not json')
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    Check 'compact window: an unreadable settings.local.json is left untouched with a warning' (($r.Out -match 'not plain valid JSON') -and ((Get-Content -Raw -LiteralPath $cwSet).Trim() -eq '{ not json')) $r.Out
+    [System.IO.File]::WriteAllText($cwSet, '{ "agent": "lead" }')
+    [System.IO.File]::WriteAllText($cwSj, '{ "lead_compact_window": "big" }')
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    Check 'compact window: invalid session.json leaves settings untouched and warns' (($r.Out -match 'session\.json is unusable') -and ((Get-Content -Raw -LiteralPath $cwSet).Trim() -eq '{ "agent": "lead" }')) $r.Out
+    [System.IO.File]::WriteAllText($cwSj, '{ "lead_compact_window": 220000 }')
+    [System.IO.File]::WriteAllText((Join-Path $cwFake '.claude\settings.json'), '{ "modelSettings": { "opus": { "autoCompactWindow": 300000 } } }')
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    Check 'compact window: a user modelSettings value wins, settings untouched, warned' (($r.Out -match 'That value wins') -and ($r.Out -match 'modelSettings\.opus') -and ((Get-Content -Raw -LiteralPath $cwSet).Trim() -eq '{ "agent": "lead" }')) $r.Out
+    Remove-Item -LiteralPath (Join-Path $cwFake '.claude\settings.json')
+    $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = '120000'
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    Remove-Item Env:\CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    Check 'compact window: the environment variable wins, settings untouched, warned' (($r.Out -match 'That value wins') -and ($r.Out -match 'CLAUDE_CODE_AUTO_COMPACT_WINDOW') -and ((Get-Content -Raw -LiteralPath $cwSet).Trim() -eq '{ "agent": "lead" }')) $r.Out
+    # --- formatting is preserved, byte for byte except the value ---
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $odd = "{`n  `"agent`": `"lead`",`n  `"note`": `"a < b > c & d 'e' é 2026-10-18T10:00:00Z /* not a comment */`",`n  `"when`": `"2026-10-18`",`n  `"autoCompactWindow`": 350000`n}`n"
+    [System.IO.File]::WriteAllText($cwSet, $odd, $utf8)
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    $after = [System.IO.File]::ReadAllText($cwSet, $utf8)
+    Check 'compact window: replacing a value leaves every other byte alone (< > & quote, escapes, dates)' (($after -ceq $odd.Replace('350000', '220000')) -and ($r.Out -match 'set to 220000')) $after
+    $odd2 = "{ `"permissions`": { `"allow`": [`"Bash(ls)`"] }, `"note`": `"x < y & 'z'`", `"nested`": { `"autoCompactWindow`": 1 } }"
+    [System.IO.File]::WriteAllText($cwSet, $odd2, $utf8)
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    $after = [System.IO.File]::ReadAllText($cwSet, $utf8)
+    Check 'compact window: a missing key is inserted after the brace, a nested key of the same name is ignored' (($after -ceq $odd2.Replace('{ "permissions"', '{ "autoCompactWindow": 220000, "permissions"')) -and (($after | ConvertFrom-Json).nested.autoCompactWindow -eq 1)) $after
+    $com = "{`n  // keep me`n  `"agent`": `"lead`" /* x */`n}`n"
+    [System.IO.File]::WriteAllText($cwSet, $com, $utf8)
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    Check 'compact window: a settings file with comments is untouched, with a warning' (([System.IO.File]::ReadAllText($cwSet, $utf8) -ceq $com) -and ($r.Out -match 'not plain valid JSON')) $r.Out
+    Check 'compact window: no .tmp or .bak files are left behind' (@(Get-ChildItem -LiteralPath (Join-Path $cwp '.claude') | Where-Object { $_.Name -match '.(tmp|bak)$' }).Count -eq 0)
+    # --- two processes writing at once ---
+    [System.IO.File]::WriteAllText($cwSet, "{`n  `"agent`": `"lead`"`n}`n", $utf8)
+    $procs = @()
+    foreach ($n in 1..2) {
+      $psi = New-Object System.Diagnostics.ProcessStartInfo
+      $psi.FileName = $PsExe
+      $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $hooks 'session-start.ps1') + '"'
+      $psi.UseShellExecute = $false; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true
+      $p = [System.Diagnostics.Process]::Start($psi)
+      $p.StandardInput.Write('{"cwd":"' + (ConvertTo-Slash $cwp) + '","source":"startup"}'); $p.StandardInput.Close()
+      $procs += $p
+    }
+    foreach ($p in $procs) { $null = $p.StandardOutput.ReadToEnd(); $p.WaitForExit() }
+    $v = $null; try { $v = ([System.IO.File]::ReadAllText($cwSet, $utf8) | ConvertFrom-Json) } catch { }
+    Check 'compact window: two session starts at once leave valid JSON with the value and no temp files' (($v -and ($v.autoCompactWindow -eq 220000) -and ($v.agent -eq 'lead')) -and (@(Get-ChildItem -LiteralPath (Join-Path $cwp '.claude') | Where-Object { $_.Name -match '.(tmp|bak)$' }).Count -eq 0)) ([System.IO.File]::ReadAllText($cwSet, $utf8))
+    # --- overrides in env blocks and managed settings ---
+    $same = [System.IO.File]::ReadAllText($cwSet, $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $cwFake '.claude\settings.json'), '{ "env": { "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "130000" } }')
+    [System.IO.File]::WriteAllText($cwSj, '{ "lead_compact_window": 180000 }')
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    Check 'compact window: CLAUDE_CODE_AUTO_COMPACT_WINDOW in an env block wins and is named' (($r.Out -match 'That value wins') -and ($r.Out -match 'env block of') -and ([System.IO.File]::ReadAllText($cwSet, $utf8) -ceq $same)) $r.Out
+    [System.IO.File]::WriteAllText((Join-Path $cwFake '.claude\settings.json'), '{ "autoCompactWindow": 111000 }')
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    Check 'compact window: a user top-level key does not win over the project local value' (($r.Out -match 'set to 180000') -and ((Get-Content -Raw -LiteralPath $cwSet | ConvertFrom-Json).autoCompactWindow -eq 180000)) $r.Out
+    Remove-Item -LiteralPath (Join-Path $cwFake '.claude\settings.json')
+    $mgd = Join-Path $Work 'managed-hook.json'
+    [System.IO.File]::WriteAllText($mgd, '{ "autoCompactWindow": 123000 }')
+    $env:AGENT_CREW_MANAGED_SETTINGS = $mgd
+    [System.IO.File]::WriteAllText($cwSj, '{ "lead_compact_window": 190000 }')
+    $same = [System.IO.File]::ReadAllText($cwSet, $utf8)
+    $r = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    Remove-Item Env:\AGENT_CREW_MANAGED_SETTINGS
+    Check 'compact window: managed settings win and are named' (($r.Out -match 'That value wins') -and ($r.Out -match 'managed settings') -and ([System.IO.File]::ReadAllText($cwSet, $utf8) -ceq $same)) $r.Out
+    # --- .gitignore ---
+    Check 'compact window: no .gitignore is created outside a git work tree' (-not (Test-Path -LiteralPath (Join-Path $cwp '.gitignore')))
+    New-Item -ItemType Directory -Force -Path (Join-Path $cwp '.git') | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $cwp '.gitignore'), "node_modules/")
+    $null = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    $null = Start-Hook 'startup' (ConvertTo-Slash $cwp)
+    $gi = [System.IO.File]::ReadAllText((Join-Path $cwp '.gitignore'))
+    Check 'compact window: session.json is added to .gitignore once' (($gi -ceq "node_modules/`n.claude/team/session.json`n")) $gi
+    $r = Start-Hook 'compact' (ConvertTo-Slash $cwp)
+    Check 'compact window: not applied on the compact source' (-not ($r.Out -match 'compact window')) $r.Out
+  } finally {
+    $env:HOME = $cwSaved.H; $env:USERPROFILE = $cwSaved.U; $env:CLAUDE_CONFIG_DIR = $cwSaved.C
+  }
 
   # no-session-links: hermetic (user folder faked, message files in the work folder)
   $nslHook = Join-Path $hooks 'no-session-links.ps1'

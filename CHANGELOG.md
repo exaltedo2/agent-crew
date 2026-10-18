@@ -4,14 +4,30 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## 0.4.2 - 2026-10-18
+
+- The lead owns its compact window: `.claude/team/session.json` (`lead_compact_window` 100000-400000 with a
+  reason; new template, gitignored), first value picked by `crew-bootstrap` (guess guideline 150000-250000),
+  adjusted later by the lead from `crew-retro` evidence without a pull request. The `session-start` hook copies it
+  into `autoCompactWindow` of the project `.claude/settings.local.json` (only that key, atomic, skipped when
+  unchanged, invalid file leaves settings untouched with a warning) and does not fight a value the user set
+  (env `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, user `modelSettings`, user top-level key). `check-team` validates the
+  file, prints the effective value and which source wins, and warns about overrides and `idleCompaction: false`.
+  The settings template no longer carries `autoCompactWindow`. README "Long sessions". `lead.md`: read report
+  summaries, not whole reports; send a review's concrete fixes to the coder in one message.
+  Upgrading a project: nothing breaks; without `session.json` the hook does nothing and `check-team` prints an INFO
+  saying the lead should create it (copy `templates/session.json` into `.claude/team/`). With one, the hook adds it
+  to the project `.gitignore` once. The hook edits `settings.local.json` as text (comments make it skip the file),
+  never fights managed settings, the env var (also in an `env` block) or `modelSettings`, and replaces an old local
+  350000 from earlier templates.
+
 ## 0.4.1 - 2026-10-18
 
 - New hook `no-session-links`: denies `git commit`, `git commit-tree`, `gh pr create/edit/comment` and `gh issue`
   commands (Bash and PowerShell, registered with `if` filters) whose text or message/body file contains a
   session link (a `Claude-Session:` trailer or a `claude.ai/code/session` URL), unless USER.md has
   `allow_session_links: true`. Fails open. The `coder` agent now follows USER.md attribution rules over any harness
-  attribution text. Version note: 0.4.0 is in the still-open PR #8; this change is based on main (0.3.2), so
-  whichever merges second needs a trivial CHANGELOG/VERSION conflict resolution.
+  attribution text.
 
 ## 0.3.2 - 2026-10-17
 

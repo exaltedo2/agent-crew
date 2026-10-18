@@ -333,11 +333,50 @@ assuming `main`.
 ## Settings template
 
 `templates/settings.local.json` (written by the bootstrap into a project's
-`.claude/settings.local.json`) contains `"agent": "lead"`, `"autoCompactWindow": 350000` and
-`"idleCompaction": true`. JSON has no comments, so here is the explanation: **the two compaction
-values are guesses** (both are documented settings), chosen to compact the lead's long context earlier than the default so it
-is re-read fewer times. Tune them against the ledger. `idleCompaction` compacts while a session
-is idle, before the prompt cache expires.
+`.claude/settings.local.json`) contains `"agent": "lead"` and `"idleCompaction": true`
+(a documented setting; compacts an idle session before the prompt cache expires). The compact
+window is not in it: see "Long sessions".
+
+## Long sessions
+
+The lead's context is re-read on every turn, so a session that never compacts gets expensive. The
+lead's compaction point comes from settings, not from the agent file: the `autoCompactWindow`
+in an agent's front matter does not apply when the agent is the main session (`claude --agent lead`).
+
+- **The lead owns the window.** It lives in `.claude/team/session.json`
+  (`{"lead_compact_window": 200000, "reason": "...", "updated": "..."}`, gitignored, written by the
+  lead; the lead may edit it, hooks and settings stay off limits). `crew-bootstrap` writes the first
+  value, a **guess**: small repo and short tasks 150000, typical 200000, large repo with long design
+  discussions 250000. `crew-retro` compares it with the lead's real context per turn and compactions
+  and the lead adjusts it, telling you in one line; no pull request. Range 100000-400000 (clamped).
+- **How it reaches Claude Code.** The `session-start` hook copies the value into `autoCompactWindow`
+  of the project's `.claude/settings.local.json` and touches no other key or file (atomic write,
+  skipped when unchanged, a missing or invalid `session.json` leaves settings alone and warns). It
+  takes effect from the next session start; whether a running session picks up a settings change is
+  not verified.
+- **What wins.** Documented order, highest first: managed (policy) settings, env
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (process environment or the `env` block of a settings file), the
+  `--autocompact` flag, `modelSettings.<model>.autoCompactWindow` (written by `/autocompact`), then top-level
+  `autoCompactWindow` (local beats project beats user). So the hook writes to `settings.local.json` and a
+  user top-level key does not win; but if it finds an env var (also in an `env` block), a `modelSettings`
+  entry or a managed value it does not fight it: it leaves settings alone and warns that the other value wins.
+  The `--autocompact` flag cannot be seen by scripts. Managed settings paths are the documented per-OS
+  ones, written from memory (unverified): `C:\Program Files\ClaudeCode\managed-settings.json`,
+  `/Library/Application Support/ClaudeCode/managed-settings.json`, `/etc/claude-code/managed-settings.json`.
+  `check-team` validates `session.json`, prints the effective value and the winning source, says when
+  there is no `session.json` (the lead should create it), and warns about overrides and `idleCompaction: false`.
+- **Your file stays yours.** The hook edits `settings.local.json` as text: it replaces only the number (or
+  inserts the key after the opening brace), never reformats or re-escapes, and leaves a file with comments
+  untouched with a warning. Writes go through a unique temp file and an atomic replace (retried a few
+  times; a short-lived `*.bak` made by the replace is deleted, so a stray `*.bak` means a crash). It also
+  adds `.claude/team/session.json` to the project `.gitignore` once (git work trees only).
+- **Idle compaction.** `idleCompaction` (default true) compacts a session that has been idle about
+  54 minutes (the 1h cache lifetime) instead of re-reading the whole context cold.
+- **After a compaction** the lead re-reads `.claude/team/state.md`, which is authoritative for open
+  tasks and running agents (the session-start hook prints it).
+
+Existing projects may still have an old local `autoCompactWindow` (earlier templates carried 350000): the
+hook replaces it with the `session.json` value.
 
 ## Tests
 
