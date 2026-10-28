@@ -41,7 +41,8 @@ value into `.claude/settings.local.json` at the next session start. If the user 
   cost, result). Change a routing row only if the evidence supports it, and tell the user
   in one line.
 - `roster.md`: set each agent's `Uses` from the ledger spawn counts; set `trial` agents with
-  3 or more uses to `kept` or flag them for retirement.
+  3 or more uses to `kept` or flag them for retirement (with `team_autonomy: auto`, decide it
+  now: step 4).
 
 ## 3. Prune under the caps
 
@@ -55,11 +56,23 @@ holding old items: move knowledge to its cold home instead of deleting it.
 
 ## 4. Team changes
 
-Look at the roster against the ledger. Propose, do not do:
-- hire: via the `crew-hire` skill (same 300+ word paste in 3+ briefs, or a failure class
-  that keeps slipping through);
+Look at the roster against the ledger. First read `team_autonomy` (PROJECT.md value, else USER.md
+value, else `ask`).
+
+`ask`: propose, do not do:
+- hire: via the `crew-hire` skill (same 300+ word paste in 3+ briefs, a failure class that keeps
+  slipping through, or a roster "Candidates later" condition that became true);
 - retire: via the `crew-retire` skill (0 spawns in 5 merged features or redundant).
 Ask the user for a one-line OK for each.
+
+`auto`: do it, and tell the user one line per change; do not ask:
+- hire on those triggers as `trial` (one trial at a time, 7-agent cap), by the rules in `crew-hire`;
+- a `trial` agent with 3 or more uses: compare its results with the trigger (did it catch the failure
+  class, did it remove the repeated paste, is it cheaper than the baseline) and check its ledger share
+  since the hire (over 10% of total usage: retire). Then set `kept` or retire it via `crew-retire`;
+- retire by the `crew-retire` criteria (0 spawns in 5 merged features, or redundant).
+Add one line under `routing.md` Evidence for each change (what, why, cost). Deleting an agent file
+still asks the user.
 
 ## 5. Generic lessons
 
@@ -73,4 +86,4 @@ as the task (a branch in a clone of agent-crew, never `main`). If the user says 
 
 Write the current ISO timestamp into `.claude/team/.last-retro` and into `roster.md`
 `last_retro:`. Run `check-team.ps1 -Project .` and fix violations. Tell the user in at most
-8 lines: cost headline (top agent types), what you pruned, what you propose.
+8 lines: cost headline (top agent types), what you pruned, what you propose (`auto`: what you changed).

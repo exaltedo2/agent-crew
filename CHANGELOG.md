@@ -4,6 +4,24 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## 0.5.0 - 2026-10-28
+
+- Opt-in autonomous team: `team_autonomy: ask | auto` (default `ask`, behaviour unchanged) in the front matter of
+  `~/.claude/team/USER.md`, overridable in a project's `PROJECT.md` (the project value wins). With `auto` the lead
+  hires on evidence as `trial` without asking (same 300+ word paste in 3+ briefs, a failure class that keeps
+  slipping through, or a roster "Candidates later" condition that became true) and tells the user one line.
+  Guardrails: one trial agent at a time and the 7-agent cap; a trial agent gets only small or medium jobs (sonnet /
+  medium at most, one bounded task); a big job for it needs a one-line user OK; its ledger share since the hire
+  must stay at or under 10% of total usage or it is retired. After 3 trial uses (retro or right away) the lead marks
+  it `kept` or retires it, and tells the user. `crew-retire` criteria also run without asking. Deleting an agent file
+  still asks. Every automatic change gets one line under `routing.md` Evidence.
+  Changed: `lead.md`, skills `crew-hire`, `crew-retire`, `crew-retro`, templates (`USER.md`, `PROJECT.md`,
+  `roster.md` with a "Candidates later" section, `routing.md`), README "Autonomous team". `check-team` accepts the
+  key, warns about other values and about more than one `trial` agent or an unknown roster status, and prints an INFO
+  when `auto` is in effect.
+  Upgrading: nothing to do; without the key the mode is `ask`. To opt in add `team_autonomy: auto` to
+  `~/.claude/team/USER.md` (the installer never overwrites it) or to a project's `PROJECT.md`.
+
 ## 0.4.2 - 2026-10-18
 
 - The lead owns its compact window: `.claude/team/session.json` (`lead_compact_window` 100000-400000 with a

@@ -14,8 +14,13 @@ last_retro: never
 | reviewer | tries to disprove a change | core | kept | 0 | never |
 | scout | cheap fact search | core | kept | 0 | 0 spawns in 5 merged PRs |
 
-Status is `trial` (a new agent, judged after 3 uses) or `kept`. "Uses" counts spawns since
-the last retro (the retro takes them from `scripts/ledger.ps1`).
+Status is `trial` (a new agent, judged after 3 uses) or `kept`. At most one agent is `trial` at a time.
+"Uses" counts spawns since the last retro (the retro takes them from `scripts/ledger.ps1`).
+
+## Candidates later
+
+<!-- agent | condition that makes it worth hiring, for example: ui-reviewer | once screens exist.
+With `team_autonomy: auto` the lead hires it as `trial` when the condition becomes true. -->
 
 ## Retired
 

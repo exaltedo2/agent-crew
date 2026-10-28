@@ -128,6 +128,32 @@ pending. After an update, projects get a one-line notice at session start if the
 `.new` files and the hook entries (backup first). Project `.claude/team/` folders are not
 touched; delete them yourself.
 
+## Autonomous team (opt-in)
+
+By default (`team_autonomy: ask`) the lead only proposes hiring or retiring an agent and waits for
+your one-line OK. Set `team_autonomy: auto` in the front matter of `~/.claude/team/USER.md` (every
+project) or of a project's `.claude/team/PROJECT.md` (the project value wins; a missing or unknown
+value means `ask`) and the lead changes the team itself and tells you one line per change:
+
+- **Hire** when a trigger fires: the same 300+ word paste in 3+ briefs, a failure class that keeps
+  slipping through, or a roster "Candidates later" condition that became true (for example
+  "ui-reviewer once screens exist"). The agent starts as `trial`. At most one trial agent at a
+  time, and the 7-agent cap holds.
+- **Trial guardrails.** A trial agent gets only small or medium jobs: one bounded task, sonnet / medium
+  at most, never opus, xhigh or max. A big job for it (cross-system, opus or high effort, a long run)
+  needs your one-line OK, the only question during a trial. Its ledger share since the hire must stay at
+  or under 10% of total usage, or the lead retires it.
+- **Judgement after 3 trial uses** (at the retro or right away): did it catch the failure class, remove
+  the repeated paste, and cost less than the baseline? The lead marks it `kept` or retires it, and tells you.
+- **Retire** by the `crew-retire` criteria (0 spawns in 5 merged features, or redundant) without asking:
+  the agent moves to the roster's Retired list with its reason and where its knowledge went. **Deleting an
+  agent file still asks you.**
+- Each automatic change gets one line under `routing.md` Evidence (what, why, cost). Restart the session
+  to load a new or retired agent.
+
+`check-team` accepts the key, warns about other values, prints an INFO when `auto` is in effect, and warns
+when more than one agent is `trial`. With `ask` nothing changes.
+
 ## Precedence and project overrides
 
 Claude Code resolves an agent or skill of the same name in this order:
@@ -140,6 +166,8 @@ Claude Code resolves an agent or skill of the same name in this order:
 - Project facts (commands, hazards, branching, who merges) go in `.claude/team/PROJECT.md`.
 - Chat language and personal preferences go in `~/.claude/team/USER.md`. On the language of
   the chat USER.md wins; on repository content PROJECT.md wins.
+- `team_autonomy` (`ask` | `auto`, see "Autonomous team") is set in USER.md and may be overridden in
+  PROJECT.md; there the project value wins.
 
 Plugin install is **not supported**: `.claude-plugin/plugin.json` only exists so
 `claude plugin validate` can check the folder. The hooks are registered in the user's
@@ -149,7 +177,7 @@ settings.json by the installer and run from the installed copy. Use the installe
 
 | File | Purpose | Cap |
 |---|---|---|
-| `PROJECT.md` | written by the coder, never by the lead. Front matter (`agent_crew_version`, `lead_writable` (default empty), `direct_to_main`, `report_only_agents`) + Context, Commands, Hazards, Conventions, Decision policy, Lead may run | |
+| `PROJECT.md` | written by the coder, never by the lead. Front matter (`agent_crew_version`, `lead_writable` (default empty), `direct_to_main`, `report_only_agents`, optional `team_autonomy`) + Context, Commands, Hazards, Conventions, Decision policy, Lead may run | |
 | `routing.md` | model and effort per job, Evidence, Learned rules | 150 lines |
 | `roster.md` | active agents (why, evidence, trial/kept, uses, retire criterion), retired | 80 lines |
 | `state.md` | goal, open tasks, running agents, pending decisions, index. Not a log. | 50 lines |
@@ -158,7 +186,8 @@ settings.json by the installer and run from the installed copy. Use the installe
 | `snapshots/`, `compact_log.md`, `.last-retro` | hook output (gitignored) | |
 
 `scripts/check-team.ps1 -Project .` validates caps, that active roster agents have agent
-files, at most 7 active agents, and one-line agent descriptions.
+files, at most 7 active agents, and one-line agent descriptions; it warns when more than one agent is
+`trial` and about an unknown `team_autonomy` value.
 
 ## Hooks
 

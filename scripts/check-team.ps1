@@ -17,6 +17,10 @@
   Validates .claude/team/session.json (the lead's compact window), prints INFO with the effective value and the
   source that wins, and warns when the settings differ from it, when CLAUDE_CODE_AUTO_COMPACT_WINDOW or a user
   setting overrides it, or when `idleCompaction` is false.
+  Reads the Status column of the roster's Active table: warns (never fails) when more than one agent is `trial`
+  and when a status is neither `trial` nor `kept`. Accepts `team_autonomy: ask|auto` in the front matter of
+  <ClaudeHome>\team\USER.md and of .claude/team/PROJECT.md (the project value wins), warns about any other
+  value (it counts as `ask`) and prints INFO when `auto` is in effect.
 
 .PARAMETER Project     Project folder (default: current folder).
 .PARAMETER ClaudeHome  User-level Claude folder (default: $HOME\.claude).
@@ -43,6 +47,9 @@ foreach ($v in @(Get-CapViolations $team)) { $problems.Add("over cap: $v") }
 
 # Active agents from the roster table.
 $active = New-Object System.Collections.Generic.List[string]
+$trialAgents = New-Object System.Collections.Generic.List[string]
+$badStatus = New-Object System.Collections.Generic.List[string]
+$statusCol = -1
 $rosterPath = Join-Path $team 'roster.md'
 if (Test-Path -LiteralPath $rosterPath -PathType Leaf) {
   $inActive = $false
@@ -53,8 +60,18 @@ if (Test-Path -LiteralPath $rosterPath -PathType Leaf) {
     $cells = @($line.Trim().Trim('|') -split '\|' | ForEach-Object { $_.Trim() })
     if ($cells.Count -eq 0) { continue }
     $first = $cells[0].Trim('`')
-    if ($first -ieq 'Name' -or $first -match '^[-: ]*$' -or $first.StartsWith('<')) { continue }
+    if ($first -ieq 'Name') {
+      $statusCol = -1
+      for ($c = 0; $c -lt $cells.Count; $c++) { if ($cells[$c] -ieq 'Status') { $statusCol = $c } }
+      continue
+    }
+    if ($first -match '^[-: ]*$' -or $first.StartsWith('<')) { continue }
     $active.Add($first)
+    if ($statusCol -ge 0 -and $cells.Count -gt $statusCol) {
+      $st = $cells[$statusCol].Trim('`').ToLowerInvariant()
+      if ($st -eq 'trial') { $trialAgents.Add($first) }
+      elseif ($st -ne 'kept') { $badStatus.Add("$first ($($cells[$statusCol]))") }
+    }
   }
 }
 if ($active.Count -gt $script:CrewMaxActiveAgents) {
@@ -102,6 +119,26 @@ foreach ($agent in $active) {
 
 # Routing rows vs the user's available models: a warning only, names are free-form aliases.
 $warnings = New-Object System.Collections.Generic.List[string]
+if ($trialAgents.Count -gt 1) {
+  $warnings.Add("$($trialAgents.Count) agents are 'trial' in roster.md ($($trialAgents -join ', ')): at most one trial agent at a time (judge or retire one first).")
+}
+if ($badStatus.Count -gt 0) {
+  $warnings.Add("roster.md Status must be 'trial' or 'kept': $($badStatus -join ', ').")
+}
+# team_autonomy (ask | auto): PROJECT.md wins over USER.md; default ask; any other value counts as ask.
+$autonomyInfo = $null
+$autonomy = 'ask'; $autonomySource = $null
+foreach ($src in @(@{ Path = (Join-Path (Join-Path $ClaudeHome 'team') 'USER.md'); Name = 'USER.md' }, @{ Path = (Join-Path $team 'PROJECT.md'); Name = 'PROJECT.md' })) {
+  $fmAuto = Get-FrontMatter $src.Path
+  if (-not $fmAuto.Contains('team_autonomy')) { continue }
+  $raw = (@($fmAuto['team_autonomy']) -join ' ').Trim().Trim('"', "'").ToLowerInvariant()
+  if ($raw -eq 'ask' -or $raw -eq 'auto') { $autonomy = $raw; $autonomySource = $src.Name }
+  else {
+    $warnings.Add("$($src.Name) team_autonomy '$raw' is not 'ask' or 'auto': it counts as 'ask'.")
+    $autonomy = 'ask'; $autonomySource = $src.Name
+  }
+}
+if ($autonomy -eq 'auto') { $autonomyInfo = "team_autonomy: auto (from $autonomySource): the lead hires, keeps and retires agents without asking" }
 $userPath = Join-Path $ClaudeHome 'team/USER.md'
 $routingPath = Join-Path $team 'routing.md'
 if ((Test-Path -LiteralPath $userPath -PathType Leaf) -and (Test-Path -LiteralPath $routingPath -PathType Leaf)) {
@@ -269,6 +306,7 @@ foreach ($f in @((Join-Path $ClaudeHome 'settings.json'), (Join-Path $Project '.
 
 foreach ($w in $warnings) { Write-Output "WARN: $w" }
 if ($cwInfo) { Write-Output "INFO: $cwInfo" }
+if ($autonomyInfo) { Write-Output "INFO: $autonomyInfo" }
 if ($problems.Count -eq 0) {
   Write-Output "OK: .claude/team passes ($($active.Count) active agents)."
   exit 0

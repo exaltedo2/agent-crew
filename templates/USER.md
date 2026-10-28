@@ -4,6 +4,12 @@
 # lead_writable:
 #   - ~/.claude/notes/**
 lead_writable: []
+# How the lead handles team changes (hire, keep, retire agents), for every project:
+#   ask  = it proposes and waits for your one-line OK (default)
+#   auto = it hires on evidence as `trial`, keeps or retires by the evidence, and tells you in one line;
+#          the only questions left are a big job for a trial agent and deleting an agent file.
+# A project can override it with the same key in .claude/team/PROJECT.md (the project value wins).
+team_autonomy: ask
 ---
 # User preferences (every project, every agent team)
 

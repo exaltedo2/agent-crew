@@ -311,6 +311,44 @@ try {
   $r = Invoke-Check $rgArgs
   Check 'check-team: a bad user ram-guard.json only warns' (($r.Exit -eq 0) -and ($r.Out -match "WARN: ram-guard: kind 'agent-spawn': 'min_free_mb'") -and ($r.Out -match "WARN: ram-guard: 'enabled'")) $r.Out
 
+  # Autonomous team: roster trial status and team_autonomy (warnings only, INFO when auto).
+  $au = Join-Path $Work 'autonomy'
+  Copy-Item -Recurse -LiteralPath $ok -Destination $au
+  New-Item -ItemType Directory -Force -Path (Join-Path $au 'claude-home\team') | Out-Null
+  $auArgs = @('-Project', $au, '-ClaudeHome', (Join-Path $au 'claude-home'))
+  $auUser = Join-Path $au 'claude-home\team\USER.md'
+  $auProj = Join-Path $au '.claude\team\PROJECT.md'
+  $auRoster = Join-Path $au '.claude\team\roster.md'
+  $auRosterOrig = [System.IO.File]::ReadAllText($auRoster)
+  $auProjOrig = [System.IO.File]::ReadAllText($auProj)
+  $r = Invoke-Check $auArgs
+  Check 'check-team: no team_autonomy anywhere: no autonomy output, no trial warning' (($r.Exit -eq 0) -and ($r.Out -notmatch 'team_autonomy|trial'))  $r.Out
+  [System.IO.File]::WriteAllText($auRoster, ($auRosterOrig -replace '\| scout \| cheap fact search \| core \| kept', '| scout | cheap fact search | core | trial'))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: one trial agent is fine' (($r.Exit -eq 0) -and ($r.Out -notmatch 'trial')) $r.Out
+  [System.IO.File]::WriteAllText($auRoster, ($auRosterOrig -replace '\| (scout|reviewer) \| ([a-z ]+) \| core \| kept', '| $1 | $2 | core | trial'))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: two trial agents warn, exit stays 0' (($r.Exit -eq 0) -and ($r.Out -match "WARN: 2 agents are 'trial' in roster\.md \(reviewer, scout\)")) $r.Out
+  [System.IO.File]::WriteAllText($auRoster, ($auRosterOrig -replace '\| scout \| cheap fact search \| core \| kept', '| scout | cheap fact search | core | probation'))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: an unknown roster status warns, exit stays 0' (($r.Exit -eq 0) -and ($r.Out -match "WARN: roster\.md Status must be 'trial' or 'kept': scout \(probation\)")) $r.Out
+  [System.IO.File]::WriteAllText($auRoster, $auRosterOrig)
+  [System.IO.File]::WriteAllText($auUser, "---`nteam_autonomy: auto`n---`n- Available models: opus, sonnet, haiku`n")
+  $r = Invoke-Check $auArgs
+  Check 'check-team: team_autonomy auto in USER.md is accepted and reported as INFO' (($r.Exit -eq 0) -and ($r.Out -match 'INFO: team_autonomy: auto \(from USER\.md\)') -and ($r.Out -notmatch 'WARN')) $r.Out
+  [System.IO.File]::WriteAllText($auProj, ($auProjOrig -replace '(?m)^report_only_agents:.*$', "`$0`nteam_autonomy: ask"))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: PROJECT.md team_autonomy ask wins over USER.md auto' (($r.Exit -eq 0) -and ($r.Out -notmatch 'team_autonomy') -and ($r.Out -notmatch 'WARN')) $r.Out
+  [System.IO.File]::WriteAllText($auUser, "---`nteam_autonomy: ask`n---`n- Available models: opus, sonnet, haiku`n")
+  [System.IO.File]::WriteAllText($auProj, ($auProjOrig -replace '(?m)^report_only_agents:.*$', "`$0`nteam_autonomy: auto"))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: PROJECT.md team_autonomy auto wins over USER.md ask' (($r.Exit -eq 0) -and ($r.Out -match 'INFO: team_autonomy: auto \(from PROJECT\.md\)')) $r.Out
+  [System.IO.File]::WriteAllText($auProj, ($auProjOrig -replace '(?m)^report_only_agents:.*$', "`$0`nteam_autonomy: sometimes"))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: an unknown team_autonomy value warns and counts as ask' (($r.Exit -eq 0) -and ($r.Out -match "WARN: PROJECT\.md team_autonomy 'sometimes' is not 'ask' or 'auto'") -and ($r.Out -notmatch 'INFO: team_autonomy')) $r.Out
+  # The shipped templates carry the key (USER.md) and the documented override (PROJECT.md).
+  Check 'templates: USER.md has team_autonomy ask, PROJECT.md documents the override' (((Get-Content -Raw (Join-Path $Root 'templates\USER.md')) -match '(?m)^team_autonomy: ask$') -and ((Get-Content -Raw (Join-Path $Root 'templates\PROJECT.md')) -match '(?m)^# team_autonomy: auto$'))
+
   # ------------------------------------------------------------------ hooks
   Section 'hooks'
   $hooks = Join-Path $Root 'hooks'
