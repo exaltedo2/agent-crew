@@ -401,6 +401,13 @@ files, the default branch and `agent_crew_version` in `PROJECT.md`, and `check-t
 your real installed `~/.claude` (agent-crew must be installed) and does not modify it; the skill
 under test is the one in this checkout.
 
+## Field report
+
+The crew was used for about 28 merged pull requests in one real project (a mobile game engine in
+Dart). The usage split was roughly coder 59%, lead 18%, reviewer 11%, others 12%. Reviews found real
+defects in most module pull requests. No controlled comparison against a single-agent setup or other
+frameworks has been done yet.
+
 ## Not verified yet
 
 - That the settings.json PreToolUse hook really blocks the lead's edit in a live session (the script

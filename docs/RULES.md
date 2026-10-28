@@ -45,6 +45,11 @@ belong in a project's `.claude/team/routing.md` "Learned rules" or `PROJECT.md`,
 8. **Escalate one step on failure or uncertainty without asking.** Why: a cheap retry one tier
    up is cheaper than a human round trip. Never give a small model a high effort.
 
+    After a usage-limit (HTTP 429) interrupt, resume the interrupted agent with SendMessage
+    rather than spawning a new one: its work is saved. Once an agent has had 2+ review rounds its
+    context is large (~200k) and it dominates spend, so start a fresh agent for an unrelated next
+    task (both observed in one real project, not benchmarked).
+
 ## Which agent for what
 
 9. **A thinker on sonnet/high matched opus/high on routine critique, with fewer tokens.** Why /
@@ -53,6 +58,8 @@ belong in a project's `.claude/team/routing.md` "Learned rules" or `PROJECT.md`,
     pull requests it was tried on, an adversarial review found at least one real bug the tests
     missed (including stuck-state bugs). Opus for changes across systems; sonnet/medium for a
     small diff. Follow-up reviews cover only the fix commit.
+    Give the reviewer a concrete "try to disprove" list (leaks, order dependence, exploits,
+    edge cases): a generic "review this" finds less (observed in one real project, not benchmarked).
 11. **A separate tester agent was redundant when the coder runs all the checks and CI repeats
     them.** Why / evidence: it added a spawn and a context without finding anything the coder
     and CI did not. It stays in `catalog/` for projects whose checks are long and noisy.
@@ -64,9 +71,16 @@ belong in a project's `.claude/team/routing.md` "Learned rules" or `PROJECT.md`,
 13. **Parallel coders use `isolation: worktree`, never kill another agent's processes, and run
     heavy checks one at a time.** Why / evidence: parallel coders collided on fixed ports and
     shared build output and killed each other's test runs, costing hours of reruns.
+13a. **Parallel coders that touch shared generated files (golden or snapshot files, rules tables)
+    conflict.** When a sibling PR merges, tell the others to merge main and regenerate. Why: an
+    "all modules together" integration test catches cross-module collisions that per-module tests
+    miss (observed in one real project, not benchmarked).
 14. **A worktree branches from the default branch and lacks gitignored folders.** Why: so a
     brief must not rely on a report or generated file that is only in the main checkout, and
     the report path must be absolute.
+14a. **Require at least one whole-system test with the real components.** Why: stand-in or fake
+    modules in tests can hide a missing production wiring (observed in one real project, not
+    benchmarked).
 
 ## Keeping the team files healthy
 

@@ -4,6 +4,12 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## Unreleased
+
+- Docs only (no `VERSION` bump): five field lessons in `docs/RULES.md` (reviewer "try to disprove" briefs,
+  shared generated files across parallel coders, resume after a 429, fresh agent after 2+ review rounds,
+  whole-system test with real components) and a README "Field report". Observed once, not benchmarked.
+
 ## 0.4.2 - 2026-10-18
 
 - The lead owns its compact window: `.claude/team/session.json` (`lead_compact_window` 100000-400000 with a
