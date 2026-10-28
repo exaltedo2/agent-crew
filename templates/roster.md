@@ -16,8 +16,8 @@ last_retro: never
 
 Status is `trial` (a new agent, judged after 3 uses) or `kept`. At most one agent is `trial` at a time.
 "Uses" counts spawns since the last retro (the retro takes them from `scripts/ledger.ps1`). "Since" is the
-hire date (`YYYY-MM-DD`) of a `trial` agent, `-` for the others: the 10% usage cap and the age limit of a
-trial count from it. Evidence `user-approved` marks agents the user chose (core, bootstrap); a leading
+hire date (`YYYY-MM-DD`) of a `trial` agent, kept when it becomes `kept` after an automatic trial, `-` for
+the others: the 10% usage cap and the age limit of a trial, and the 0-spawn count of `crew-retire`, count from it. Evidence `user-approved` marks agents the user chose (core, bootstrap); a leading
 `auto:` marks agents the lead hired itself under `team_autonomy: auto`.
 
 ## Candidates later

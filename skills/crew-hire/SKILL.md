@@ -47,8 +47,12 @@ value: `ask`.
 
 With `auto`, a trigger above lets the lead hire without asking, as `trial`, and tell the user one
 line: what was hired and why. The same ladder and limits apply, plus:
-- **One trial at a time.** If an agent is already `trial`, judge it first (below); no second hire.
-  The 7-agent cap still holds.
+- **One trial at a time.** If an agent is already `trial` in `roster.md`, or a hire is pending, judge or
+  wait for it first (below); no second hire. A **pending hire** is an auto hire whose agent-file PR is not
+  merged yet: the roster row only lands with that PR, so the lead records it in `state.md` under
+  "Pending hire" (agent, PR link, date) as soon as it opens the PR and deletes the entry when the PR is
+  merged or closed. Check both `state.md` and the roster before every auto hire. The 7-agent cap counts
+  the pending hire too.
 - **Trial guardrails.** A trial agent gets only small or medium jobs: one bounded task, at most
   sonnet / medium, never opus, xhigh or max (its agent file must not set a higher model or effort;
   `check-team` warns). A big job for it (cross-system, opus or high effort, a long run) needs a
@@ -59,7 +63,7 @@ line: what was hired and why. The same ladder and limits apply, plus:
   Check at each retro and when judging. Over 10%: retire it with `crew-retire`.
 - **Judgement after 3 uses**, at the retro or right away: compare the results with the trigger.
   Did it catch the failure class? Did it remove the repeated paste? Is it cheaper than the
-  baseline (the same jobs done by the existing agents)? Then set `kept` (and `Since` to `-`) or retire
+  baseline (the same jobs done by the existing agents)? Then set `kept` (keep its `Since` date: `crew-retire` counts from it) or retire
   it with `crew-retire`, and tell the user one line either way. Do not ask.
 - **Age limit.** A trial with fewer than 3 uses after **5 merged features or 14 days** since `Since` is
   judged on what exists: unused (0 uses) means retire; otherwise the same questions as above. Tell the

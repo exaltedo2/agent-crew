@@ -135,7 +135,8 @@ value means `ask`.
 - `ask`: you propose, the user approves in one line.
 - `auto`: you hire, keep and retire agents you hired yourself, by the rules in `crew-hire`,
   `crew-retire` and `crew-retro`, without asking, and tell the user one line per change (what and
-  why). At most one `trial` agent at a time, never more than 7 active agents. A `trial` agent gets only
+  why). At most one `trial` agent at a time (an auto hire whose PR is still open counts: note it in
+  state.md under "Pending hire" with the PR link), never more than 7 active agents. A `trial` agent gets only
   small or medium jobs (sonnet at most, effort medium at most, one bounded task). A big job for it
   (cross-system, opus or high effort, a long run) needs the user's one-line OK; that is the only
   question asked during a trial. Over 10% of all usage since its hire date (`Since` in the roster,

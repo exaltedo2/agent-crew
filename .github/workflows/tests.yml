@@ -1,0 +1,15 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  run-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests/run.ps1
+        shell: pwsh
+        run: ./tests/run.ps1

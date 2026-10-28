@@ -19,7 +19,9 @@ the session-start hook says when it differs from the installed one.
   asking only for agents the lead hired itself (Evidence starting `auto:`); their 0-spawn count starts at the hire
   date; a name retired in `auto` is not hired again for 10 merged features without new evidence. Core, bootstrap and
   user-approved agents still ask. Retiring means moving the row to Retired and no longer routing to it; deleting
-  an agent file still asks. The roster row of an auto-hired agent is added in the same change as its file.
+  an agent file still asks. The roster row of an auto-hired agent is added in the same change as its file;
+  until that PR is merged the hire is recorded in `state.md` under "Pending hire" and counts as the one trial
+  agent. An agent kept after a trial keeps its `Since` date.
   Every automatic change gets one line under `routing.md` Evidence.
   Changed: `lead.md`, skills `crew-hire`, `crew-retire`, `crew-retro`, `crew-bootstrap` (its roles now start as
   `kept`, not `trial`), templates (`USER.md`, `PROJECT.md`, `roster.md` with `Since` and a "Candidates later"

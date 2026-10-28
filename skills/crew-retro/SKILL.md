@@ -42,7 +42,7 @@ value into `.claude/settings.local.json` at the next session start. If the user 
   in one line.
 - `roster.md`: set each agent's `Uses` from the ledger spawn counts; set `trial` agents with
   3 or more uses to `kept` or propose their retirement (with `team_autonomy: auto`, decide it
-  now: step 4). Keep the roster `Since` column true: a date for each `trial`, `-` otherwise.
+  now: step 4). Keep the roster `Since` column true: the hire date for each `trial` and for each agent kept after an automatic trial (never reset it), `-` for the others.
 
 ## 3. Prune under the caps
 
