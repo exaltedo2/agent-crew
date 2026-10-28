@@ -4,6 +4,12 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## Unreleased
+
+- Docs only (no `VERSION` bump): five field lessons in `docs/RULES.md` (reviewer "try to disprove" briefs,
+  shared generated files across parallel coders, resume after a 429, fresh agent after 2+ review rounds,
+  whole-system test with real components) and a README "Field report". Observed once, not benchmarked.
+
 ## 0.5.0 - 2026-10-28
 
 - Opt-in autonomous team: `team_autonomy: ask | auto` (default `ask`) in the front matter of
