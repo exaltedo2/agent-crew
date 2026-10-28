@@ -20,7 +20,7 @@ inside: each project describes itself in `.claude/team/PROJECT.md`.
 | `reviewer` | Adversarial review: tries to disprove the change. | sonnet / medium |
 | `scout` | Facts-only search: paths and line numbers. | haiku / low |
 
-Skills: `crew-bootstrap` (set a project up), `crew-retro` (measure, prune, propose),
+Skills: `crew-bootstrap` (set a project up), `crew-retro` (measure, prune, propose; with `auto` it applies team changes),
 `crew-hire`, `crew-retire`. More roles to hire from live in `catalog/` (`tester`,
 `ui-reviewer`, `security-reviewer`, `docs-writer`, `perf-profiler`). The generic rules
 and the evidence behind them are in [docs/RULES.md](docs/RULES.md).
@@ -131,28 +131,40 @@ touched; delete them yourself.
 ## Autonomous team (opt-in)
 
 By default (`team_autonomy: ask`) the lead only proposes hiring or retiring an agent and waits for
-your one-line OK. Set `team_autonomy: auto` in the front matter of `~/.claude/team/USER.md` (every
-project) or of a project's `.claude/team/PROJECT.md` (the project value wins; a missing or unknown
-value means `ask`) and the lead changes the team itself and tells you one line per change:
+your one-line OK. Set `team_autonomy: auto` in the front matter of **`~/.claude/team/USER.md`** and the
+lead changes the team itself and tells you one line per change. `auto` takes effect only from the
+user-level file: a project's `.claude/team/PROJECT.md` can only restrict it (`team_autonomy: ask` turns it
+off for that project; `auto` there has no effect, so a cloned repository cannot enable unattended
+changes). A missing, empty or unknown value means `ask`.
 
 - **Hire** when a trigger fires: the same 300+ word paste in 3+ briefs, a failure class that keeps
   slipping through, or a roster "Candidates later" condition that became true (for example
-  "ui-reviewer once screens exist"). The agent starts as `trial`. At most one trial agent at a
-  time, and the 7-agent cap holds.
+  "ui-reviewer once screens exist"). The agent starts as `trial`, its hire date goes in the roster's `Since`
+  column, and its row is added in the same change as its agent file. At most one trial agent at a time, and
+  the 7-agent cap holds. A name retired automatically is not hired again for 10 merged features without new
+  evidence (recorded in `routing.md` Evidence).
 - **Trial guardrails.** A trial agent gets only small or medium jobs: one bounded task, sonnet / medium
-  at most, never opus, xhigh or max. A big job for it (cross-system, opus or high effort, a long run)
-  needs your one-line OK, the only question during a trial. Its ledger share since the hire must stay at
-  or under 10% of total usage, or the lead retires it.
+  at most, never opus, xhigh or max (`check-team` warns when its agent file sets more). A big job for it
+  (cross-system, opus or high effort, a long run) needs your one-line OK, the only question during a trial.
+  Its weighted share of **all** usage since its hire date (`ledger.ps1 -Since <Since>`) must stay at or
+  under 10%, or the lead retires it.
 - **Judgement after 3 trial uses** (at the retro or right away): did it catch the failure class, remove
   the repeated paste, and cost less than the baseline? The lead marks it `kept` or retires it, and tells you.
-- **Retire** by the `crew-retire` criteria (0 spawns in 5 merged features, or redundant) without asking:
-  the agent moves to the roster's Retired list with its reason and where its knowledge went. **Deleting an
-  agent file still asks you.**
+  A trial with fewer than 3 uses after 5 merged features or 14 days is judged on what exists (unused: retired);
+  `check-team` warns about a trial older than 14 days.
+- **Retire** an agent the lead hired itself by the `crew-retire` criteria (0 spawns in 5 merged features
+  counted since the hire, or redundant) without asking. Retiring means the agent moves from Active to the
+  roster's Retired list (reason, where its knowledge went) and is no longer routed to; **its file stays**
+  and deleting it still asks you. Core agents, the roles `crew-bootstrap` created (they start as `kept`) and
+  any agent you approved are never retired without asking.
 - Each automatic change gets one line under `routing.md` Evidence (what, why, cost). Restart the session
   to load a new or retired agent.
 
-`check-team` accepts the key, warns about other values, prints an INFO when `auto` is in effect, and warns
-when more than one agent is `trial`. With `ask` nothing changes.
+`check-team` accepts the key, warns when `PROJECT.md` sets `auto` (ignored) or any value other than `ask` /
+`auto`, prints an INFO when `auto` is in effect, and warns when more than one agent is `trial`, when a trial
+is older than 14 days or has no valid `Since`, and when a trial agent's file sets a model above sonnet or an
+effort above medium. With `ask` the flow is the same as before, apart from those warnings, the new
+"Candidates later" hire trigger and the stricter wording of retiring (see the changelog).
 
 ## Precedence and project overrides
 
@@ -166,8 +178,8 @@ Claude Code resolves an agent or skill of the same name in this order:
 - Project facts (commands, hazards, branching, who merges) go in `.claude/team/PROJECT.md`.
 - Chat language and personal preferences go in `~/.claude/team/USER.md`. On the language of
   the chat USER.md wins; on repository content PROJECT.md wins.
-- `team_autonomy` (`ask` | `auto`, see "Autonomous team") is set in USER.md and may be overridden in
-  PROJECT.md; there the project value wins.
+- `team_autonomy` (`ask` | `auto`, see "Autonomous team") is enabled only in USER.md; PROJECT.md can
+  only restrict it to `ask`.
 
 Plugin install is **not supported**: `.claude-plugin/plugin.json` only exists so
 `claude plugin validate` can check the folder. The hooks are registered in the user's
@@ -177,9 +189,9 @@ settings.json by the installer and run from the installed copy. Use the installe
 
 | File | Purpose | Cap |
 |---|---|---|
-| `PROJECT.md` | written by the coder, never by the lead. Front matter (`agent_crew_version`, `lead_writable` (default empty), `direct_to_main`, `report_only_agents`, optional `team_autonomy`) + Context, Commands, Hazards, Conventions, Decision policy, Lead may run | |
+| `PROJECT.md` | written by the coder, never by the lead. Front matter (`agent_crew_version`, `lead_writable` (default empty), `direct_to_main`, `report_only_agents`, optional `team_autonomy: ask`) + Context, Commands, Hazards, Conventions, Decision policy, Lead may run | |
 | `routing.md` | model and effort per job, Evidence, Learned rules | 150 lines |
-| `roster.md` | active agents (why, evidence, trial/kept, uses, retire criterion), retired | 80 lines |
+| `roster.md` | active agents (why, evidence, trial/kept, uses, hire date for trials, retire criterion), retired | 80 lines |
 | `state.md` | goal, open tasks, running agents, pending decisions, index. Not a log. | 50 lines |
 | `roles/<agent>.md` | optional rule addendum for one agent | |
 | `reports/` | long agent output (gitignored); agents return the path | |
@@ -187,7 +199,7 @@ settings.json by the installer and run from the installed copy. Use the installe
 
 `scripts/check-team.ps1 -Project .` validates caps, that active roster agents have agent
 files, at most 7 active agents, and one-line agent descriptions; it warns when more than one agent is
-`trial` and about an unknown `team_autonomy` value.
+`trial`, about a trial that is too old or sets a high model/effort, and about a bad `team_autonomy` value.
 
 ## Hooks
 

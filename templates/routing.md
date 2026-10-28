@@ -35,7 +35,8 @@ and why. Cap: 150 lines (the retro prunes it).
 
 <!-- One line per measurement: what was tried, what it cost (run scripts/ledger.ps1), what
 it found. The retro adds lines here and prunes old ones. With `team_autonomy: auto` every
-automatic hire, keep or retire also gets one line (what, why, cost). -->
+automatic hire, keep or retire also gets one line (what, why, cost). Also record the new evidence
+when an agent retired in `auto` is hired again within 10 merged features. -->
 
 ## Learned rules
 

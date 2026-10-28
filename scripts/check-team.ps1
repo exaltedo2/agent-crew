@@ -17,10 +17,12 @@
   Validates .claude/team/session.json (the lead's compact window), prints INFO with the effective value and the
   source that wins, and warns when the settings differ from it, when CLAUDE_CODE_AUTO_COMPACT_WINDOW or a user
   setting overrides it, or when `idleCompaction` is false.
-  Reads the Status column of the roster's Active table: warns (never fails) when more than one agent is `trial`
-  and when a status is neither `trial` nor `kept`. Accepts `team_autonomy: ask|auto` in the front matter of
-  <ClaudeHome>\team\USER.md and of .claude/team/PROJECT.md (the project value wins), warns about any other
-  value (it counts as `ask`) and prints INFO when `auto` is in effect.
+  Reads the Status and Since columns of the roster's Active table: warns (never fails) when more than one agent is
+  `trial`, when a status is neither `trial` nor `kept`, when a trial has no valid `Since` date (YYYY-MM-DD) or is
+  older than 14 days, and when a trial agent's own file sets a model other than sonnet/haiku or an effort of
+  high, xhigh or max. `team_autonomy: ask|auto`: `auto` counts only when the front matter of
+  <ClaudeHome>\team\USER.md says so; the one in .claude/team/PROJECT.md can only restrict (`ask`): `auto` there
+  is ignored with a warning, any other value warns and counts as `ask`. Prints INFO when `auto` is in effect.
 
 .PARAMETER Project     Project folder (default: current folder).
 .PARAMETER ClaudeHome  User-level Claude folder (default: $HOME\.claude).
@@ -48,8 +50,11 @@ foreach ($v in @(Get-CapViolations $team)) { $problems.Add("over cap: $v") }
 # Active agents from the roster table.
 $active = New-Object System.Collections.Generic.List[string]
 $trialAgents = New-Object System.Collections.Generic.List[string]
+$trialSince = @{}
+$trialFileWarn = New-Object System.Collections.Generic.List[string]
 $badStatus = New-Object System.Collections.Generic.List[string]
 $statusCol = -1
+$sinceCol = -1
 $rosterPath = Join-Path $team 'roster.md'
 if (Test-Path -LiteralPath $rosterPath -PathType Leaf) {
   $inActive = $false
@@ -61,15 +66,21 @@ if (Test-Path -LiteralPath $rosterPath -PathType Leaf) {
     if ($cells.Count -eq 0) { continue }
     $first = $cells[0].Trim('`')
     if ($first -ieq 'Name') {
-      $statusCol = -1
-      for ($c = 0; $c -lt $cells.Count; $c++) { if ($cells[$c] -ieq 'Status') { $statusCol = $c } }
+      $statusCol = -1; $sinceCol = -1
+      for ($c = 0; $c -lt $cells.Count; $c++) {
+        if ($cells[$c] -ieq 'Status') { $statusCol = $c }
+        if ($cells[$c] -ieq 'Since') { $sinceCol = $c }
+      }
       continue
     }
     if ($first -match '^[-: ]*$' -or $first.StartsWith('<')) { continue }
     $active.Add($first)
     if ($statusCol -ge 0 -and $cells.Count -gt $statusCol) {
       $st = $cells[$statusCol].Trim('`').ToLowerInvariant()
-      if ($st -eq 'trial') { $trialAgents.Add($first) }
+      if ($st -eq 'trial') {
+        $trialAgents.Add($first)
+        $trialSince[$first] = if ($sinceCol -ge 0 -and $cells.Count -gt $sinceCol) { $cells[$sinceCol].Trim('`') } else { '' }
+      }
       elseif ($st -ne 'kept') { $badStatus.Add("$first ($($cells[$statusCol]))") }
     }
   }
@@ -98,6 +109,18 @@ foreach ($agent in $active) {
   $value = ($lines[$descIndex] -replace '^description:\s*', '').Trim()
   if ($value -eq '' -or $value -match '^[|>][+-]?$') { $problems.Add("agent '$agent': description must be one line of text"); continue }
   if ($descIndex + 1 -lt $end -and $lines[$descIndex + 1] -match '^\s+\S') { $problems.Add("agent '$agent': description spans several lines") }
+  if ($trialAgents -contains $agent) {
+    for ($i = 1; $i -lt $end; $i++) {
+      if ($lines[$i] -match '^model:\s*(.*?)\s*$') {
+        $mv = $Matches[1].Trim('"', "'").Trim()
+        if ($mv -ne '' -and $mv -notmatch '(?i)sonnet|haiku') { $trialFileWarn.Add("trial agent '$agent' ($found) sets model '$mv': a trial agent may use sonnet at most (a bigger model needs the user's OK per job).") }
+      }
+      if ($lines[$i] -match '^effort:\s*(.*?)\s*$') {
+        $ev = $Matches[1].Trim('"', "'").Trim()
+        if ($ev -match '(?i)^(high|xhigh|max)$') { $trialFileWarn.Add("trial agent '$agent' ($found) sets effort '$ev': a trial agent may use medium at most.") }
+      }
+    }
+  }
   if ($agent -eq 'lead') {
     for ($i = 1; $i -lt $end; $i++) {
       if ($lines[$i] -match '^tools:\s*(.*)$') {
@@ -122,23 +145,38 @@ $warnings = New-Object System.Collections.Generic.List[string]
 if ($trialAgents.Count -gt 1) {
   $warnings.Add("$($trialAgents.Count) agents are 'trial' in roster.md ($($trialAgents -join ', ')): at most one trial agent at a time (judge or retire one first).")
 }
+foreach ($w in $trialFileWarn) { $warnings.Add($w) }
+foreach ($t in $trialAgents) {
+  $sv = [string]$trialSince[$t]
+  $sd = [datetime]::MinValue
+  if (-not [datetime]::TryParseExact($sv, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$sd)) {
+    $warnings.Add("trial agent '$t' has no valid Since date (YYYY-MM-DD) in roster.md: its age and its usage cap cannot be checked.")
+  } elseif (([datetime]::Today - $sd).TotalDays -gt 14) {
+    $warnings.Add("trial agent '$t' was hired on $sv, more than 14 days ago: judge it on what exists (kept or retire it).")
+  }
+}
 if ($badStatus.Count -gt 0) {
   $warnings.Add("roster.md Status must be 'trial' or 'kept': $($badStatus -join ', ').")
 }
-# team_autonomy (ask | auto): PROJECT.md wins over USER.md; default ask; any other value counts as ask.
+# team_autonomy (ask | auto): `auto` counts only when USER.md says so; PROJECT.md can only restrict (ask).
+# Missing, empty or unknown values mean ask.
 $autonomyInfo = $null
-$autonomy = 'ask'; $autonomySource = $null
-foreach ($src in @(@{ Path = (Join-Path (Join-Path $ClaudeHome 'team') 'USER.md'); Name = 'USER.md' }, @{ Path = (Join-Path $team 'PROJECT.md'); Name = 'PROJECT.md' })) {
-  $fmAuto = Get-FrontMatter $src.Path
-  if (-not $fmAuto.Contains('team_autonomy')) { continue }
-  $raw = (@($fmAuto['team_autonomy']) -join ' ').Trim().Trim('"', "'").ToLowerInvariant()
-  if ($raw -eq 'ask' -or $raw -eq 'auto') { $autonomy = $raw; $autonomySource = $src.Name }
-  else {
-    $warnings.Add("$($src.Name) team_autonomy '$raw' is not 'ask' or 'auto': it counts as 'ask'.")
-    $autonomy = 'ask'; $autonomySource = $src.Name
-  }
+$userAuto = $false; $projectRestricts = $false
+$fmUserAuto = Get-FrontMatter (Join-Path (Join-Path $ClaudeHome 'team') 'USER.md')
+if ($fmUserAuto.Contains('team_autonomy')) {
+  $rawU = (@($fmUserAuto['team_autonomy']) -join ' ').Trim().Trim('"', "'").ToLowerInvariant()
+  if ($rawU -eq 'auto') { $userAuto = $true }
+  elseif ($rawU -ne 'ask') { $warnings.Add("USER.md team_autonomy '$rawU' is not 'ask' or 'auto': it counts as 'ask'.") }
 }
-if ($autonomy -eq 'auto') { $autonomyInfo = "team_autonomy: auto (from $autonomySource): the lead hires, keeps and retires agents without asking" }
+$fmProjAuto = Get-FrontMatter (Join-Path $team 'PROJECT.md')
+if ($fmProjAuto.Contains('team_autonomy')) {
+  $rawP = (@($fmProjAuto['team_autonomy']) -join ' ').Trim().Trim('"', "'").ToLowerInvariant()
+  if ($rawP -eq 'auto') { $warnings.Add("PROJECT.md team_autonomy 'auto' is ignored: only ~/.claude/team/USER.md can enable it (PROJECT.md may only set 'ask').") }
+  elseif ($rawP -ne 'ask') { $projectRestricts = $true; $warnings.Add("PROJECT.md team_autonomy '$rawP' is not 'ask' or 'auto': it counts as 'ask'.") }
+  else { $projectRestricts = $true }
+}
+$autonomy = if ($userAuto -and -not $projectRestricts) { 'auto' } else { 'ask' }
+if ($autonomy -eq 'auto') { $autonomyInfo = "team_autonomy: auto (from USER.md): the lead hires, keeps and retires the agents it hired itself without asking" }
 $userPath = Join-Path $ClaudeHome 'team/USER.md'
 $routingPath = Join-Path $team 'routing.md'
 if ((Test-Path -LiteralPath $userPath -PathType Leaf) -and (Test-Path -LiteralPath $routingPath -PathType Leaf)) {

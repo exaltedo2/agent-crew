@@ -8,9 +8,9 @@ direct_to_main: []
 # Optional: extra agents that may write only to .claude/team/reports/ (added to the built-in
 # thinker, architect, reviewer, ui-reviewer, security-reviewer, perf-profiler).
 report_only_agents: []
-# Optional: `ask` or `auto`. Overrides `team_autonomy` of ~/.claude/team/USER.md for this project (this value
-# wins). Leave it out to use the user-level value (default `ask`).
-# team_autonomy: auto
+# Optional: `team_autonomy: ask` turns the autonomous team off for this project even if the user's
+# ~/.claude/team/USER.md says `auto`. `auto` here has no effect: only the user-level file can enable it.
+# team_autonomy: ask
 ---
 
 # Project profile
