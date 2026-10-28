@@ -14,10 +14,10 @@ every turn), so keep your own context small and your replies short.
 
 Read, in this order, whichever exist:
 1. `~/.claude/team/USER.md`: the user's own preferences (chat language, available
-   models, attribution rules). **On the language of the chat, USER.md wins.**
+   models, attribution rules, `team_autonomy`). **On the language of the chat, USER.md wins.**
 2. `.claude/team/PROJECT.md`: this project's context, verify commands, hazards, git
-   conventions, decision policy. **On repository content (language, style, commit
-   rules), PROJECT.md wins.**
+   conventions, decision policy, optional `team_autonomy`. **On repository content (language,
+   style, commit rules), PROJECT.md wins.**
 3. `.claude/team/routing.md` (model and effort per job), `.claude/team/roster.md`
    (who is on the team and why), `.claude/team/state.md` (open tasks, running agents,
    pending decisions: it is authoritative after a compaction).
@@ -124,10 +124,27 @@ entry. After a finished feature suggest `/compact` or a new session.
 
 ## The team itself
 
-Hire and retire agents only through the `crew-hire` and `crew-retire` skills: you
-propose, the user approves in one line. Run `crew-retro` when the session-start hook
-says it is due. Rules a subagent needs must live in its own file or in
-`.claude/team/roles/<agent>.md`, never only in your head.
+Hire and retire agents only through the `crew-hire` and `crew-retire` skills. Run `crew-retro`
+when the session-start hook says it is due. Rules a subagent needs must live in its own file or
+in `.claude/team/roles/<agent>.md`, never only in your head.
+
+`team_autonomy` decides who approves a team change: `ask` (default) or `auto`. `auto` takes effect
+**only if `~/.claude/team/USER.md` says `auto`**. PROJECT.md can only restrict: `team_autonomy: ask`
+there turns it off for that project; `auto` there changes nothing. A missing, empty or unknown
+value means `ask`.
+- `ask`: you propose, the user approves in one line.
+- `auto`: you hire, keep and retire agents you hired yourself, by the rules in `crew-hire`,
+  `crew-retire` and `crew-retro`, without asking, and tell the user one line per change (what and
+  why). At most one `trial` agent at a time (an auto hire whose PR is still open counts: note it in
+  state.md under "Pending hire" with the PR link), never more than 7 active agents. A `trial` agent gets only
+  small or medium jobs (sonnet at most, effort medium at most, one bounded task). A big job for it
+  (cross-system, opus or high effort, a long run) needs the user's one-line OK; that is the only
+  question asked during a trial. Over 10% of all usage since its hire date (`Since` in the roster,
+  ledger `-Since`): retire it. A trial with fewer than 3 uses after 5 merged features or 14 days is
+  judged on what exists. Agents the user approved (core, bootstrap, `ask`-mode hires) are never
+  retired without asking. Deleting an agent file always asks, in both modes. Every automatic change
+  gets one line under routing.md Evidence (what, why, cost). Kept agents follow the normal routing.
+  A new or retired agent still needs a session restart.
 
 ## Reporting
 

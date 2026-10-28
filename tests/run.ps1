@@ -311,6 +311,82 @@ try {
   $r = Invoke-Check $rgArgs
   Check 'check-team: a bad user ram-guard.json only warns' (($r.Exit -eq 0) -and ($r.Out -match "WARN: ram-guard: kind 'agent-spawn': 'min_free_mb'") -and ($r.Out -match "WARN: ram-guard: 'enabled'")) $r.Out
 
+  # Autonomous team: roster trial status, Since date, trial agent file, team_autonomy (warnings only, INFO when auto).
+  $au = Join-Path $Work 'autonomy'
+  Copy-Item -Recurse -LiteralPath $ok -Destination $au
+  New-Item -ItemType Directory -Force -Path (Join-Path $au 'claude-home\team') | Out-Null
+  $auArgs = @('-Project', $au, '-ClaudeHome', (Join-Path $au 'claude-home'))
+  $auUser = Join-Path $au 'claude-home\team\USER.md'
+  $auProj = Join-Path $au '.claude\team\PROJECT.md'
+  $auRoster = Join-Path $au '.claude\team\roster.md'
+  $auScout = Join-Path $au 'claude-home\agents\scout.md'
+  $auRosterOrig = [System.IO.File]::ReadAllText($auRoster)
+  $auProjOrig = [System.IO.File]::ReadAllText($auProj)
+  $auScoutOrig = [System.IO.File]::ReadAllText($auScout)
+  $today = (Get-Date).ToString('yyyy-MM-dd')
+  $old20 = (Get-Date).AddDays(-20).ToString('yyyy-MM-dd')
+  function Set-Trial([string[]]$Names, [string]$Since) {
+    $t = $auRosterOrig
+    foreach ($n in $Names) { $t = $t -replace ('(?m)^\| ' + $n + ' \| ([^|]*)\| core \| kept \| (\S+) \| - \|'), ('| ' + $n + ' | $1| auto: fixture | trial | $2 | ' + $Since + ' |') }
+    [System.IO.File]::WriteAllText($auRoster, $t)
+  }
+  $r = Invoke-Check $auArgs
+  Check 'check-team: no team_autonomy anywhere: no autonomy output, no trial warning' (($r.Exit -eq 0) -and ($r.Out -notmatch 'team_autonomy|trial')) $r.Out
+  Set-Trial @('scout') $today
+  $r = Invoke-Check $auArgs
+  Check 'check-team: one fresh trial agent with a Since date is fine' (($r.Exit -eq 0) -and ($r.Out -notmatch 'trial')) $r.Out
+  Set-Trial @('scout', 'reviewer') $today
+  $r = Invoke-Check $auArgs
+  Check 'check-team: two trial agents warn, exit stays 0' (($r.Exit -eq 0) -and ($r.Out -match "WARN: 2 agents are 'trial' in roster\.md \(reviewer, scout\)")) $r.Out
+  Set-Trial @('scout') $old20
+  $r = Invoke-Check $auArgs
+  Check 'check-team: a trial older than 14 days warns' (($r.Exit -eq 0) -and ($r.Out -match "WARN: trial agent 'scout' was hired on $old20, more than 14 days ago")) $r.Out
+  Set-Trial @('scout') '-'
+  $r = Invoke-Check $auArgs
+  Check 'check-team: a trial without a valid Since date warns' (($r.Exit -eq 0) -and ($r.Out -match "WARN: trial agent 'scout' has no valid Since date")) $r.Out
+  Set-Trial @('scout') $today
+  [System.IO.File]::WriteAllText($auScout, ($auScoutOrig -replace 'model: sonnet', "model: opus`neffort: high"))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: a trial agent file with model opus and effort high warns twice' (($r.Exit -eq 0) -and ($r.Out -match "WARN: trial agent 'scout' .*sets model 'opus'") -and ($r.Out -match "WARN: trial agent 'scout' .*sets effort 'high'")) $r.Out
+  [System.IO.File]::WriteAllText($auScout, ($auScoutOrig -replace 'model: sonnet', "model: sonnet`neffort: medium"))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: a trial agent file with sonnet / medium does not warn' (($r.Exit -eq 0) -and ($r.Out -notmatch 'sets model|sets effort')) $r.Out
+  [System.IO.File]::WriteAllText($auRoster, $auRosterOrig)
+  [System.IO.File]::WriteAllText($auScout, ($auScoutOrig -replace 'model: sonnet', "model: opus`neffort: xhigh"))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: a kept agent file is not checked for model and effort' (($r.Exit -eq 0) -and ($r.Out -notmatch 'sets model|sets effort')) $r.Out
+  [System.IO.File]::WriteAllText($auScout, $auScoutOrig)
+  [System.IO.File]::WriteAllText($auRoster, ($auRosterOrig -replace '\| scout \| cheap fact search \| core \| kept', '| scout | cheap fact search | core | probation'))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: an unknown roster status warns, exit stays 0' (($r.Exit -eq 0) -and ($r.Out -match "WARN: roster\.md Status must be 'trial' or 'kept': scout \(probation\)")) $r.Out
+  [System.IO.File]::WriteAllText($auRoster, $auRosterOrig)
+  [System.IO.File]::WriteAllText($auUser, "---`nteam_autonomy: auto`n---`n- Available models: opus, sonnet, haiku`n")
+  $r = Invoke-Check $auArgs
+  Check 'check-team: team_autonomy auto in USER.md is accepted and reported as INFO' (($r.Exit -eq 0) -and ($r.Out -match 'INFO: team_autonomy: auto \(from USER\.md\)') -and ($r.Out -notmatch 'WARN')) $r.Out
+  [System.IO.File]::WriteAllText($auProj, ($auProjOrig -replace '(?m)^report_only_agents:.*$', "`$0`nteam_autonomy: ask"))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: PROJECT.md team_autonomy ask restricts USER.md auto (no INFO, no warning)' (($r.Exit -eq 0) -and ($r.Out -notmatch 'team_autonomy') -and ($r.Out -notmatch 'WARN')) $r.Out
+  [System.IO.File]::WriteAllText($auUser, "---`nteam_autonomy: ask`n---`n- Available models: opus, sonnet, haiku`n")
+  [System.IO.File]::WriteAllText($auProj, ($auProjOrig -replace '(?m)^report_only_agents:.*$', "`$0`nteam_autonomy: auto"))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: PROJECT.md auto cannot enable it: warns, no INFO' (($r.Exit -eq 0) -and ($r.Out -match "WARN: PROJECT\.md team_autonomy 'auto' is ignored") -and ($r.Out -notmatch 'INFO: team_autonomy')) $r.Out
+  [System.IO.File]::Delete($auUser)
+  $r = Invoke-Check $auArgs
+  Check 'check-team: PROJECT.md auto without any USER.md is ignored too' (($r.Exit -eq 0) -and ($r.Out -match "is ignored") -and ($r.Out -notmatch 'INFO: team_autonomy')) $r.Out
+  [System.IO.File]::WriteAllText($auUser, "---`nteam_autonomy: auto`n---`n- Available models: opus, sonnet, haiku`n")
+  [System.IO.File]::WriteAllText($auProj, ($auProjOrig -replace '(?m)^report_only_agents:.*$', "`$0`nteam_autonomy:"))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: an empty PROJECT.md team_autonomy counts as ask: warns, no INFO' (($r.Exit -eq 0) -and ($r.Out -match "WARN: PROJECT\.md team_autonomy '' is not") -and ($r.Out -notmatch 'INFO: team_autonomy')) $r.Out
+  [System.IO.File]::WriteAllText($auProj, ($auProjOrig -replace '(?m)^report_only_agents:.*$', "`$0`nteam_autonomy: sometimes"))
+  $r = Invoke-Check $auArgs
+  Check 'check-team: an unknown PROJECT.md value warns and counts as ask' (($r.Exit -eq 0) -and ($r.Out -match "WARN: PROJECT\.md team_autonomy 'sometimes' is not 'ask' or 'auto'") -and ($r.Out -notmatch 'INFO: team_autonomy')) $r.Out
+  [System.IO.File]::WriteAllText($auProj, $auProjOrig)
+  [System.IO.File]::WriteAllText($auUser, "---`nteam_autonomy: sometimes`n---`n- Available models: opus, sonnet, haiku`n")
+  $r = Invoke-Check $auArgs
+  Check 'check-team: an unknown USER.md value warns and counts as ask' (($r.Exit -eq 0) -and ($r.Out -match "WARN: USER\.md team_autonomy 'sometimes'") -and ($r.Out -notmatch 'INFO: team_autonomy')) $r.Out
+  # The shipped templates: USER.md carries the key; PROJECT.md only documents the restricting value; roster has Since.
+  Check 'templates: USER.md has team_autonomy ask, PROJECT.md documents only the restriction, roster has Since' (((Get-Content -Raw (Join-Path $Root 'templates\USER.md')) -match '(?m)^team_autonomy: ask$') -and ((Get-Content -Raw (Join-Path $Root 'templates\PROJECT.md')) -match '(?m)^# team_autonomy: ask$') -and ((Get-Content -Raw (Join-Path $Root 'templates\roster.md')) -match '\| Status \| Uses \| Since \|'))
+
   # ------------------------------------------------------------------ hooks
   Section 'hooks'
   $hooks = Join-Path $Root 'hooks'

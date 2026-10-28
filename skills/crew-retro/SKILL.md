@@ -1,6 +1,6 @@
 ---
 name: crew-retro
-description: Periodic retrospective of the agent team. Measures real token cost with the ledger, updates routing Evidence and roster uses, prunes the team files under their line caps, proposes hires and retirements, and offers generic lessons upstream. Use when the session-start hook says the retro is due.
+description: Periodic retrospective of the agent team. Measures real token cost with the ledger, updates routing Evidence and roster uses, prunes the team files under their line caps, proposes hires and retirements (or makes them itself when team_autonomy is auto), and offers generic lessons upstream. Use when the session-start hook says the retro is due.
 ---
 
 # crew-retro
@@ -41,7 +41,8 @@ value into `.claude/settings.local.json` at the next session start. If the user 
   cost, result). Change a routing row only if the evidence supports it, and tell the user
   in one line.
 - `roster.md`: set each agent's `Uses` from the ledger spawn counts; set `trial` agents with
-  3 or more uses to `kept` or flag them for retirement.
+  3 or more uses to `kept` or propose their retirement (with `team_autonomy: auto`, decide it
+  now: step 4). Keep the roster `Since` column true: the hire date for each `trial` and for each agent kept after an automatic trial (never reset it), `-` for the others.
 
 ## 3. Prune under the caps
 
@@ -55,11 +56,27 @@ holding old items: move knowledge to its cold home instead of deleting it.
 
 ## 4. Team changes
 
-Look at the roster against the ledger. Propose, do not do:
-- hire: via the `crew-hire` skill (same 300+ word paste in 3+ briefs, or a failure class
-  that keeps slipping through);
+Look at the roster against the ledger. First read `team_autonomy`: `auto` only if USER.md says so and
+PROJECT.md does not say `ask`; otherwise `ask`.
+
+`ask`: propose, do not do:
+- hire: via the `crew-hire` skill (same 300+ word paste in 3+ briefs, a failure class that keeps
+  slipping through, or a roster "Candidates later" condition that became true);
 - retire: via the `crew-retire` skill (0 spawns in 5 merged features or redundant).
 Ask the user for a one-line OK for each.
+
+`auto`: do it for agents you hired automatically, and tell the user one line per change; do not ask:
+- hire on those triggers as `trial` (one trial at a time, 7-agent cap, no re-hire of a name retired in
+  `auto` within 10 merged features without new evidence), by the rules in `crew-hire`;
+- a `trial` agent with 3 or more uses: compare its results with the trigger (did it catch the failure
+  class, did it remove the repeated paste, is it cheaper than the baseline) and its weighted share of all
+  usage since its `Since` date (ledger `-Since`; over 10%: retire). Then set `kept` or retire it via
+  `crew-retire`. A trial with fewer than 3 uses after 5 merged features or 14 days is judged on what
+  exists; unused means retire;
+- retire an automatically hired agent by the `crew-retire` criteria (0 spawns in the 5+ features merged
+  since its hire, or redundant).
+Core, bootstrap and user-approved agents are still only proposed. Add one line under `routing.md` Evidence
+for each change (what, why, cost). Deleting an agent file still asks the user.
 
 ## 5. Generic lessons
 
@@ -73,4 +90,4 @@ as the task (a branch in a clone of agent-crew, never `main`). If the user says 
 
 Write the current ISO timestamp into `.claude/team/.last-retro` and into `roster.md`
 `last_retro:`. Run `check-team.ps1 -Project .` and fix violations. Tell the user in at most
-8 lines: cost headline (top agent types), what you pruned, what you propose.
+8 lines: cost headline (top agent types), what you pruned, what you propose (`auto`: what you changed).

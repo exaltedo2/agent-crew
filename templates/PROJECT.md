@@ -1,5 +1,5 @@
 ---
-agent_crew_version: 0.4.2
+agent_crew_version: 0.5.0
 # Extra globs (relative to the repo root) the lead may edit itself, besides .claude/team/**.
 # Never effective for this file, .claude/settings*.json or hook scripts: those go through the coder.
 lead_writable: []
@@ -8,6 +8,9 @@ direct_to_main: []
 # Optional: extra agents that may write only to .claude/team/reports/ (added to the built-in
 # thinker, architect, reviewer, ui-reviewer, security-reviewer, perf-profiler).
 report_only_agents: []
+# Optional: `team_autonomy: ask` turns the autonomous team off for this project even if the user's
+# ~/.claude/team/USER.md says `auto`. `auto` here has no effect: only the user-level file can enable it.
+# team_autonomy: ask
 ---
 
 # Project profile
