@@ -4,6 +4,36 @@ All notable changes to agent-crew. The version is in `VERSION`; a project's
 `.claude/team/PROJECT.md` records the version it was written for (`agent_crew_version`), and
 the session-start hook says when it differs from the installed one.
 
+## 0.5.0 - 2026-10-28
+
+- Opt-in autonomous team: `team_autonomy: ask | auto` (default `ask`) in the front matter of
+  `~/.claude/team/USER.md`. `auto` takes effect ONLY from the user-level file; a project's `PROJECT.md` can only
+  restrict it with `ask` (`auto` there is ignored and `check-team` warns); a missing, empty or unknown value is
+  `ask`. With `auto` the lead hires on evidence as `trial` without asking (same 300+ word paste in 3+ briefs, a
+  failure class that keeps slipping through, or a roster "Candidates later" condition that became true) and tells
+  the user one line. Guardrails: one trial agent at a time and the 7-agent cap; a trial agent gets only small or
+  medium jobs (sonnet / medium at most, one bounded task), a big job for it needs a one-line user OK; its weighted
+  share of all usage since its hire date (new roster column `Since`, ledger `-Since`) must stay at or under 10% or it
+  is retired; a trial with fewer than 3 uses after 5 merged features or 14 days is judged on what exists. After 3
+  trial uses the lead marks it `kept` or retires it and tells the user. The `crew-retire` criteria run without
+  asking only for agents the lead hired itself (Evidence starting `auto:`); their 0-spawn count starts at the hire
+  date; a name retired in `auto` is not hired again for 10 merged features without new evidence. Core, bootstrap and
+  user-approved agents still ask. Retiring means moving the row to Retired and no longer routing to it; deleting
+  an agent file still asks. The roster row of an auto-hired agent is added in the same change as its file;
+  until that PR is merged the hire is recorded in `state.md` under "Pending hire" and counts as the one trial
+  agent. An agent kept after a trial keeps its `Since` date.
+  Every automatic change gets one line under `routing.md` Evidence.
+  Changed: `lead.md`, skills `crew-hire`, `crew-retire`, `crew-retro`, `crew-bootstrap` (its roles now start as
+  `kept`, not `trial`), templates (`USER.md`, `PROJECT.md`, `roster.md` with `Since` and a "Candidates later"
+  section, `routing.md`), README "Autonomous team", RULES 18.
+  Also in `ask` mode (not strictly unchanged): "Candidates later" is a new hire trigger, `crew-retire` defines
+  retiring as the roster move, and `check-team` has new warnings (more than one `trial` agent, a Status other than
+  `trial` / `kept`, a trial without a valid `Since` or older than 14 days, a trial agent file with a model above
+  sonnet or an effort above medium, a bad `team_autonomy` value). The warnings never fail the check.
+  Upgrading: nothing breaks; without the key the mode is `ask`. A roster without the `Since` column still works
+  (add the column for trials). To opt in add `team_autonomy: auto` to `~/.claude/team/USER.md` (the installer never
+  overwrites it).
+
 ## 0.4.2 - 2026-10-18
 
 - The lead owns its compact window: `.claude/team/session.json` (`lead_compact_window` 100000-400000 with a

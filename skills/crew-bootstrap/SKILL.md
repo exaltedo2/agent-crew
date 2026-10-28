@@ -58,8 +58,8 @@ Minimal core: `lead`, `coder`, `reviewer`, `scout`. Add `thinker` and `architect
 the work is design-heavy. Offer catalog roles only with a reason tied to an answer:
 `tester` (checks are long and noisy), `ui-reviewer` (there is a visual UI),
 `security-reviewer` (auth, secrets, untrusted input), `docs-writer` (docs drift often),
-`perf-profiler` (performance matters). At most 7 active agents. Hired catalog agents start
-as `trial`.
+`perf-profiler` (performance matters). At most 7 active agents. The user approves this roster, so
+every role in it starts as `kept` (the `trial` status is for later hires by `crew-hire`).
 
 ## 4. Write `.claude/team/`
 
@@ -69,7 +69,7 @@ The lead writes the files that are its own (a hook blocks the file-edit tools el
   150000, typical 200000, large repo with long design discussions 250000; never above 400000 (clamped
   to 100000-400000). The lead changes it later itself (`crew-retro`). Mention it is a guess.
 - `routing.md` from `$CREW/templates/routing.md`; delete table rows for agents that are not in the roster.
-- `roster.md` from the template: only the agents of the roster, status `trial` for catalog roles.
+- `roster.md` from the template: only the agents of the roster, all with status `kept`, `Since` `-` and Evidence `user-approved`.
 - `state.md` from the template, with the Goal filled and `updated:` set to the current time.
 - `.last-retro` containing the current ISO timestamp (so the retro is not due at once).
 - no `reports/` or `snapshots/` folder: agents and hooks create them when first needed.

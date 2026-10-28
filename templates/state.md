@@ -16,6 +16,11 @@ After a compaction this file is authoritative for open tasks and running agents.
 
 <!-- | agent id | task | report path (absolute) | -->
 
+## Pending hire
+
+<!-- team_autonomy auto only: an agent whose file PR is open (it counts as the one trial agent).
+     agent | PR link | date. Delete the line when the PR is merged or closed. -->
+
 ## Pending decisions
 
 <!-- Decisions waiting for the user, each with the current default. -->

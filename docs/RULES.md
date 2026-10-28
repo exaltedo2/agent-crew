@@ -83,7 +83,10 @@ belong in a project's `.claude/team/routing.md` "Learned rules" or `PROJECT.md`,
     disuse.** Why: every agent description is loaded into the lead's context, and more roles
     means more routing mistakes. Hire when the same 300+ words were pasted into 3+ briefs or a
     failure class keeps slipping through; prefer a role addendum, then a skill, then a new
-    agent.
+    agent. The user approves each hire and retirement, except under the opt-in `team_autonomy: auto`
+    (enabled only in the user-level file): then the lead hires one `trial` agent at a time and retires
+    agents it hired itself without asking, within a 10% usage cap and an age limit; deleting an agent
+    file always asks.
 
 ## Mechanical gotchas
 
