@@ -750,3 +750,116 @@ function Invoke-CompactWindowSync {
   $clamp = ''; if ($s.Clamped) { $clamp = " (requested $($s.Requested), clamped to $($script:CompactMin)-$($script:CompactMax))" }
   return @("agent-crew: lead compact window set to $($s.Value)$clamp in .claude/settings.local.json from .claude/team/session.json.$why It takes effect from the next session start (whether Claude Code picks up a settings change inside a running session is not verified).")
 }
+
+# ---------- subagent compact windows ----------
+# Each crew agent ships a default `autoCompactWindow` in its front matter (a subagent context smaller than the model's
+# full window: cheaper turns, earlier compaction). The lead may override it per project in .claude/team/session.json
+# {"agent_compact_windows": {"coder": 180000, ...}}. The SessionStart hook writes the value into the front matter of the
+# project's own agent file (<project>/.claude/agents/<name>.md); an agent without a project file keeps the shipped
+# default (changing that is a pull request to agent-crew). Claude Code only LOWERS a subagent's window with this field,
+# and CLAUDE_CODE_AUTO_COMPACT_WINDOW, when set, replaces it.
+$script:AgentCompactMin = 100000
+$script:AgentCompactMax = 1000000
+
+function Get-AgentCompactWindows {
+  # Returns @{ Entries = @(@{ Name; Value; Requested; Clamped }); Problems = @(...) }. No file or no key: no entries.
+  param([string]$Team)
+  $r = @{ Entries = @(); Problems = @() }
+  $j = Read-JsonFile (Join-Path $Team 'session.json')
+  if ($null -eq $j) { return $r }
+  $prop = $j.PSObject.Properties['agent_compact_windows']
+  if (-not $prop -or $null -eq $prop.Value) { return $r }
+  if (-not ($prop.Value -is [System.Management.Automation.PSCustomObject])) { $r.Problems += 'agent_compact_windows must be an object {"agent": tokens}'; return $r }
+  $list = @()
+  foreach ($p in $prop.Value.PSObject.Properties) {
+    $name = [string]$p.Name
+    if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$') { $r.Problems += "agent name '$name' is not valid"; continue }
+    $v = $p.Value
+    if ($null -eq $v -or $v -is [string] -or $v -is [bool] -or -not ($v -is [ValueType])) { $r.Problems += "agent_compact_windows.$name must be a number"; continue }
+    $d = [double]$v
+    if ([double]::IsNaN($d) -or [double]::IsInfinity($d) -or $d -ne [Math]::Floor($d)) { $r.Problems += "agent_compact_windows.$name must be a whole number of tokens"; continue }
+    $req = [long]$d
+    $val = [long][Math]::Min([Math]::Max($req, $script:AgentCompactMin), $script:AgentCompactMax)
+    $list += @{ Name = $name; Value = $val; Requested = $req; Clamped = ($val -ne $req) }
+  }
+  $r.Entries = $list
+  return $r
+}
+
+function Get-FrontMatterNumber {
+  # The integer value of a top-level `Key: N` line in a markdown file's front matter, or $null.
+  param([string]$Path, [string]$Key)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+  $lines = [System.IO.File]::ReadAllLines($Path)
+  if ($lines.Count -lt 2 -or $lines[0].Trim([char]0xFEFF).Trim() -ne '---') { return $null }
+  for ($i = 1; $i -lt $lines.Count; $i++) {
+    if ($lines[$i].Trim() -eq '---') { break }
+    if ($lines[$i] -match ('^' + [regex]::Escape($Key) + ':\s*(\d+)\s*$')) { return [long]$Matches[1] }
+  }
+  return $null
+}
+
+function Set-AgentFileCompactWindow {
+  # Sets ONLY the `autoCompactWindow:` line in the front matter of an agent file (replaced in place, or appended just
+  # before the closing ---). Everything else stays byte for byte. Returns 'unchanged', 'changed', 'unreadable' (no
+  # front matter) or 'failed'.
+  param([string]$Path, [long]$Value)
+  $utf8 = New-Object System.Text.UTF8Encoding($false)
+  $uniq = "$PID.$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+  $tmp = "$Path.$uniq.tmp"; $bak = "$Path.$uniq.bak"
+  try {
+    $text = $utf8.GetString([System.IO.File]::ReadAllBytes($Path))
+    $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $m = [regex]::Match($text, '^\uFEFF?---[ \t]*\r?\n')
+    if (-not $m.Success) { return 'unreadable' }
+    $close = [regex]::Match($text.Substring($m.Length), '(?m)^---[ \t]*\r?$')
+    if (-not $close.Success) { return 'unreadable' }
+    $fmStart = $m.Length; $fmEnd = $m.Length + $close.Index
+    $fm = $text.Substring($fmStart, $fmEnd - $fmStart)
+    $line = [regex]::Match($fm, '(?m)^autoCompactWindow:[^\r\n]*')
+    if ($line.Success) {
+      if ($line.Value.Trim() -eq "autoCompactWindow: $Value") { return 'unchanged' }
+      $newFm = $fm.Substring(0, $line.Index) + "autoCompactWindow: $Value" + $fm.Substring($line.Index + $line.Length)
+    } else {
+      $sep = if ($fm.Length -eq 0 -or $fm.EndsWith("`n")) { '' } else { $nl }
+      $newFm = $fm + $sep + "autoCompactWindow: $Value" + $nl
+    }
+    $new = $text.Substring(0, $fmStart) + $newFm + $text.Substring($fmEnd)
+    [System.IO.File]::WriteAllBytes($tmp, $utf8.GetBytes($new))
+    for ($try = 1; $try -le 5; $try++) {
+      try { [System.IO.File]::Replace($tmp, $Path, $bak); return 'changed' }
+      catch { if ($try -eq 5) { return 'failed' }; Start-Sleep -Milliseconds (50 * $try) }
+    }
+    return 'failed'
+  } catch {
+    return 'failed'
+  } finally {
+    Remove-Item -LiteralPath $tmp, $bak -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Invoke-AgentCompactSync {
+  # SessionStart: applies session.json agent_compact_windows to the project's agent files. Returns lines to print.
+  param([string]$Team, [string]$Project)
+  $w = Get-AgentCompactWindows $Team
+  $out = @()
+  foreach ($p in $w.Problems) { $out += "agent-crew: session.json: $p; that entry is ignored." }
+  if ($w.Entries.Count -eq 0) { return $out }
+  $ev = [Environment]::GetEnvironmentVariable('CLAUDE_CODE_AUTO_COMPACT_WINDOW')
+  if (-not [string]::IsNullOrWhiteSpace($ev)) {
+    $out += "agent-crew: CLAUDE_CODE_AUTO_COMPACT_WINDOW ($($ev.Trim())) is set; subagents use it instead of their autoCompactWindow, so agent_compact_windows has no effect."
+  }
+  $changed = @(); $missing = @()
+  foreach ($e in $w.Entries) {
+    $file = Join-Path $Project ".claude/agents/$($e.Name).md"
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { $missing += $e.Name; continue }
+    $res = Set-AgentFileCompactWindow $file $e.Value
+    $clamp = ''; if ($e.Clamped) { $clamp = " (requested $($e.Requested), clamped to $($script:AgentCompactMin)-$($script:AgentCompactMax))" }
+    if ($res -eq 'changed') { $changed += "$($e.Name) $($e.Value)$clamp" }
+    elseif ($res -eq 'unreadable') { $out += "agent-crew: .claude/agents/$($e.Name).md has no front matter; its autoCompactWindow was not set." }
+    elseif ($res -eq 'failed') { $out += "agent-crew: could not write .claude/agents/$($e.Name).md (busy?); retried at the next session start." }
+  }
+  if ($changed.Count -gt 0) { $out += "agent-crew: subagent compact windows set from session.json: $($changed -join ', '). New agents of these types use them." }
+  if ($missing.Count -gt 0) { $out += "agent-crew: agent_compact_windows names agents without a project file ($($missing -join ', ')); they keep their shipped default (change it with a pull request to agent-crew)." }
+  return $out
+}

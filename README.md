@@ -380,6 +380,18 @@ window is not in it: see "Long sessions".
 
 ## Long sessions
 
+**Subagents have their own windows.** Every crew agent ships an `autoCompactWindow` in its front matter (scout
+100000, thinker / architect / reviewer 150000, coder 200000): a subagent's context is re-read on every one of its
+turns, and task-scoped work rarely needs more, so they no longer inherit a 1M window. The field can only lower the
+model's window; `CLAUDE_CODE_AUTO_COMPACT_WINDOW` replaces it. The lead overrides it per project with
+`agent_compact_windows` in `.claude/team/session.json` (`{"coder": 180000}`, 100000-1000000); the session-start
+hook writes only that line into the project's `.claude/agents/<name>.md` (agents without a project file keep the
+shipped default). The lead also manages compaction: before resuming an agent it runs `scripts/agent-context.ps1`
+(current context, window, percent, auto-compactions per subagent transcript) and at 60% of the window, after an
+auto-compaction or at a phase boundary it asks the agent for a short handoff note and continues with a fresh
+agent. Claude Code's auto-compaction stays as the safety net.
+
+
 The lead's context is re-read on every turn, so a session that never compacts gets expensive. The
 lead's compaction point comes from settings, not from the agent file: the `autoCompactWindow`
 in an agent's front matter does not apply when the agent is the main session (`claude --agent lead`).

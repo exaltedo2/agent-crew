@@ -10,6 +10,21 @@ the session-start hook says when it differs from the installed one.
   shared generated files across parallel coders, resume after a 429, fresh agent after 2+ review rounds,
   whole-system test with real components) and a README "Field report". Observed once, not benchmarked.
 
+## 0.6.0 - 2026-11-18
+
+- Each agent has its own, smaller context window: shipped `autoCompactWindow` in the front matter (scout 100000,
+  thinker / architect / reviewer 150000, coder 200000). Subagents no longer inherit a 1M window; turns re-read
+  less and compaction comes before quality drops. The lead's own window is unchanged (`session.json`).
+- The lead changes them per project without a pull request: `agent_compact_windows` in `.claude/team/session.json`
+  (`{"coder": 180000}`, 100000-1000000, clamped). The session-start hook writes ONLY the `autoCompactWindow:` line
+  into the front matter of the project's `.claude/agents/<name>.md` (atomic, skipped when unchanged); an agent
+  without a project file keeps the shipped default. Warns when `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides it.
+  `check-team` validates the map and reports drift.
+- Lead-managed compaction: new `scripts/agent-context.ps1` shows each subagent's current context, window, percent
+  and auto-compactions from its transcript, with the advice `resume` or `handoff`. `lead.md`: check before every
+  resume; at 60% of the window, after an auto-compaction or at a phase boundary, ask the agent for a 40-line handoff
+  in `.claude/team/reports/` and continue with a fresh agent. Auto-compaction stays as the safety net.
+
 ## 0.5.0 - 2026-10-28
 
 - Opt-in autonomous team: `team_autonomy: ask | auto` (default `ask`) in the front matter of

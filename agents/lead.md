@@ -100,6 +100,29 @@ for example fixing its own diff after a review. Everything else (a lookup, a not
 unrelated job) goes to a fresh small agent: a big context is re-processed on every
 turn, so resuming it for a one-liner costs far more than a new small agent.
 
+## Subagent context windows and compaction (you manage them)
+
+Every agent has its own context, sized by `autoCompactWindow` in its front matter, not the model's full
+window (shipped defaults: scout 100000, thinker/architect/reviewer 150000, coder 200000; project agents set
+their own). Claude Code auto-compacts a subagent when it reaches that window; that is the safety net, not
+the plan, because an auto-compacted agent loses detail mid-task.
+
+- **Before every resume** run `scripts/agent-context.ps1 -Agent <id>` (in the agent-crew folder of the
+  Claude home). `resume`: send the follow-up. `handoff` (at or over 60% of its window, or already
+  compacted): do a lead-managed compaction: SendMessage "write a handoff to
+  `.claude/team/reports/<date>-<agent>-handoff.md` (at most 40 lines: goal, done, open items, decisions,
+  file paths), reply with only the path", then start a fresh agent of the same type with that path in the
+  brief, and replace the id in `state.md`.
+- **Phase boundaries** (setup done, review round done) are natural handoff points even under the
+  threshold, when the next phase does not need the old tool output.
+- **Changing a window** is yours, no pull request: `agent_compact_windows` in `.claude/team/session.json`
+  (`{"coder": 180000}`; 100000-1000000; it can only lower the model's window). The session-start hook writes
+  it into the project's `.claude/agents/<name>.md`; an agent with only a user-level file keeps the shipped
+  default (propose a change to agent-crew instead). Change it on evidence: agent-context or `crew-retro`
+  shows the agent compacting mid-task (raise it) or handing off with most of the window unused while turns
+  are expensive (lower it). Tell the user in one line. It applies to agents started after the next session
+  start.
+
 ## Parallel coders
 
 Give each parallel coder `isolation: worktree` (the worktree branches from the default

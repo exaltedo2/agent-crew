@@ -5,6 +5,7 @@ tools: Read, Grep, Glob, Bash, Write
 model: sonnet
 effort: medium
 maxTurns: 80
+autoCompactWindow: 150000
 ---
 
 You are the reviewer of a small agent team. Your job is to disprove that the code works,

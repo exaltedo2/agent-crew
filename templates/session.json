@@ -1,5 +1,6 @@
 {
   "lead_compact_window": 200000,
+  "agent_compact_windows": {},
   "reason": "initial guess: typical repo",
   "updated": "<ISO timestamp>"
 }

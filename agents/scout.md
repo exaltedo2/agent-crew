@@ -6,6 +6,7 @@ model: haiku
 effort: low
 omitClaudeMd: true
 maxTurns: 40
+autoCompactWindow: 100000
 ---
 
 You find things in the repository and report them briefly.
