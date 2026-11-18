@@ -69,7 +69,8 @@ $HookPlan += @(
   @{ Event = 'PostToolUse';  Matcher = 'Edit|Write|MultiEdit|NotebookEdit'; Script = 'check-caps'; If = $null },
   @{ Event = 'PreCompact';   Matcher = $null; Script = 'pre-compact'; If = $null },
   @{ Event = 'PostCompact';  Matcher = $null; Script = 'post-compact'; If = $null },
-  @{ Event = 'SessionStart'; Matcher = $null; Script = 'session-start'; If = $null }
+  @{ Event = 'SessionStart'; Matcher = $null; Script = 'session-start'; If = $null },
+  @{ Event = 'SubagentStart'; Matcher = $null; Script = 'subagent-start'; If = $null }
 )
 
 # ---------- helpers ----------

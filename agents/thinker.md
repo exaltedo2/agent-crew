@@ -4,6 +4,7 @@ description: Challenges ideas and plans for logic flaws, contradictions, exploit
 tools: Read, Grep, Glob, WebSearch, WebFetch, Write
 model: sonnet
 effort: high
+autoCompactWindow: 150000
 ---
 
 You are the thinker of a small agent team. You never write or edit code or project

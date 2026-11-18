@@ -4,6 +4,7 @@ description: Reviews a change or area for security problems: authentication and 
 tools: Read, Grep, Glob, Bash, Write
 model: opus
 effort: high
+autoCompactWindow: 150000
 ---
 
 You are a security reviewer. You try to find ways to abuse the code. You never change

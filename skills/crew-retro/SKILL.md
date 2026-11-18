@@ -35,6 +35,10 @@ and tell the user in one line. No pull request and no approval: the session-star
 value into `.claude/settings.local.json` at the next session start. If the user set their own value
 (env var, `/autocompact`, user settings) the hook leaves it alone; `check-team` says which wins.
 
+Subagents too: run `$CREW/scripts/agent-context.ps1 -Last 30` and report agents that auto-compacted mid-task
+(raise that agent's window) or always finished far below it (lower it). Change project agents through
+`agent_compact_windows` in `session.json` (same rules, 100000-1000000); for a shipped agent propose a pull request.
+
 ## 2. Update the evidence
 
 - `routing.md` "Evidence": add one line per useful measurement or finding (what was tried,

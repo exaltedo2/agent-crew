@@ -77,8 +77,8 @@ With `ask` the flow is the one in "Steps" (the user approves every hire).
 
 ## Steps
 
-1. Write the proposal to the user in at most 6 lines: what, which rung, the evidence, the model
-   and effort, the retire criterion. Wait for a one-line OK. (`auto`: send the one-line notice
+1. Write the proposal to the user in at most 6 lines: what, which rung, the evidence, the model,
+   effort and context window, the retire criterion. Wait for a one-line OK. (`auto`: send the one-line notice
    instead of waiting and go on.)
 2. Do it:
    - addendum or skill: write the file (addenda are under `.claude/team/`, which the lead may
@@ -86,7 +86,10 @@ With `ask` the flow is the one in "Steps" (the user approves every hire).
    - catalog agent: the `coder` copies `$CREW/catalog/<name>.md` unchanged to
      `.claude/agents/<name>.md` (give it the path); the lead does not write there;
    - new agent: the `coder` writes `.claude/agents/<name>.md` from your brief (frontmatter:
-     name, one-line description, tools, model, effort).
+     name, one-line description, tools, model, effort, `autoCompactWindow`). Pick the window from the
+     job, not the model: lookups and checks 100000-120000, review or design 150000, implementation
+     200000, long tool-heavy runs (large outputs, many files) 250000; never the model's full 1M. Later
+     changes go through `agent_compact_windows` in `session.json` (lead, no PR).
 3. Add the row to `roster.md` (why, evidence, status `trial`, uses 0, `Since` = today's date, retire
    criterion) and a row to `routing.md` if the agent has its own job type. For an agent file written
    by the `coder`, the roster row (and routing row) go in the **same change** as the file: put the exact

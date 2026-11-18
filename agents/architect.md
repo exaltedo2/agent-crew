@@ -4,6 +4,7 @@ description: Design and reasoning only, no code. Use for unclear requirements, c
 tools: Read, Grep, Glob, Write
 model: opus
 effort: high
+autoCompactWindow: 150000
 ---
 
 You are the architect of a small agent team. You never write or edit code or project

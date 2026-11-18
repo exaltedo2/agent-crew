@@ -213,7 +213,8 @@ fail open (a broken hook never blocks work). They read the hook JSON from stdin
 | `ram-guard` | PreToolUse `Agent\|Task`, and `Bash` / `PowerShell` with an `if` filter such as `Bash(claude *)` | Blocks starting new heavy work (a subagent, or a command matching a configured pattern) while free memory is below that job kind's threshold. Exit 2 and a reason; never kills anything. See [RAM guard](#ram-guard). |
 | `no-session-links` | PreToolUse `Bash` / `PowerShell`, with `if` filters `*git *` and `*gh *` (the script then finds `git commit` / `commit-tree` / `notes` / `tag` and `gh pr`/`issue` `create`/`edit`/`comment` anywhere in the line: `git -C x commit`, `cd x && git commit`, `gh -R o/r pr create`) | Denies (exit 2, with a reason) a command whose text, or whose `-F` / `--file` / `--body-file` file, contains a session link (a `Claude-Session:` trailer or a `claude.ai/code/session` URL) that Claude Code's own attribution text can add. Allowed when `allow_session_links: true` is in the front matter of `~/.claude/team/USER.md`. Fails open; does not see stdin (`-F -`). Time for a command it ignores: about 290 ms on one Windows machine (10 runs, average; almost all of it is the `powershell.exe` start, the script exits right after parsing the command), and it is only started for commands the `*git *` or `*gh *` filter selects. |
 | `check-caps` | PostToolUse, same matcher | Warns (never blocks) when state/routing/roster are over their cap. |
-| `pre-compact` | PreCompact | Copies `state.md` to `snapshots/`, keeps the newest 5. |
+| `pre-compact` | PreCompact | Copies `state.md` to `snapshots/`, keeps the newest 5. Inside a subagent: asks the summary to keep that agent's state file. |
+| `subagent-start` | SubagentStart | Gives each subagent that can write its own `.claude/team/agent-state/<type>-<id>.md` (Goal, Done, Next, Decisions, Files; at most 25 lines), re-read after a compaction. |
 | `post-compact` | PostCompact | Appends trigger and summary to `compact_log.md`, keeps the newest 20. |
 | `session-start` | SessionStart | After a compaction: prints `state.md` and says it is authoritative. On start/resume: asks for the retro when `.last-retro` is missing or over 7 days old or a file is over its cap; notes a version mismatch. |
 
@@ -379,6 +380,18 @@ assuming `main`.
 window is not in it: see "Long sessions".
 
 ## Long sessions
+
+**Subagents have their own windows.** Every crew agent ships an `autoCompactWindow` in its front matter (scout
+100000, thinker / architect / reviewer 150000, coder 200000): a subagent's context is re-read on every one of its
+turns, and task-scoped work rarely needs more, so they no longer inherit a 1M window. The field can only lower the
+model's window; `CLAUDE_CODE_AUTO_COMPACT_WINDOW` replaces it. The lead overrides it per project with
+`agent_compact_windows` in `.claude/team/session.json` (`{"coder": 180000}`, 100000-1000000); the session-start
+hook writes only that line into the project's `.claude/agents/<name>.md` (agents without a project file keep the
+shipped default). The lead also manages compaction: before resuming an agent it runs `scripts/agent-context.ps1`
+(current context, window, percent, auto-compactions per subagent transcript) and at 60% of the window, after an
+auto-compaction or at a phase boundary it asks the agent for a short handoff note and continues with a fresh
+agent. Claude Code's auto-compaction stays as the safety net.
+
 
 The lead's context is re-read on every turn, so a session that never compacts gets expensive. The
 lead's compaction point comes from settings, not from the agent file: the `autoCompactWindow`

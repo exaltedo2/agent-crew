@@ -5,7 +5,8 @@
   - source startup/resume/clear: says "run the crew-retro skill now" when .last-retro is
     missing or older than 7 days or a capped team file is over its cap; says so when
     PROJECT.md agent_crew_version differs from the installed VERSION.
-  Also copies .claude/team/session.json lead_compact_window into the project settings.local.json autoCompactWindow.
+  Also copies .claude/team/session.json lead_compact_window into the project settings.local.json autoCompactWindow,
+  and agent_compact_windows into the front matter of the project's own .claude/agents/<name>.md files.
   No-op without .claude/team.
 #>
 $ErrorActionPreference = 'Stop'
@@ -33,6 +34,10 @@ try {
 
   # The lead owns its compact window (.claude/team/session.json): copy it into the project settings.
   foreach ($line in @(Invoke-CompactWindowSync $team $root (Get-UserClaudeHomes))) { Write-Output $line }
+  # ... and its per-project subagent windows (agent_compact_windows) into the project's own agent files.
+  foreach ($line in @(Invoke-AgentCompactSync $team $root)) { Write-Output $line }
+  # Subagent working-state files older than a week belong to finished work.
+  try { Remove-OldAgentState $team } catch { }
 
   $reasons = @()
   $marker = Join-Path $team '.last-retro'
