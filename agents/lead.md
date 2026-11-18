@@ -107,12 +107,16 @@ window (shipped defaults: scout 100000, thinker/architect/reviewer 150000, coder
 their own). Claude Code auto-compacts a subagent when it reaches that window; that is the safety net, not
 the plan, because an auto-compacted agent loses detail mid-task.
 
+- **Each agent keeps its own state**, like your `state.md`: the SubagentStart hook gives every agent that
+  can write a file `.claude/team/agent-state/<type>-<id>.md` (Goal, Done, Next, Decisions, Files) and it
+  updates it at each milestone, so an auto-compaction loses nothing and you do not have to re-check its
+  work. Read that file (not a resume) when you only need its status.
 - **Before every resume** run `scripts/agent-context.ps1 -Agent <id>` (in the agent-crew folder of the
   Claude home). `resume`: send the follow-up. `handoff` (at or over 60% of its window, or already
-  compacted): do a lead-managed compaction: SendMessage "write a handoff to
-  `.claude/team/reports/<date>-<agent>-handoff.md` (at most 40 lines: goal, done, open items, decisions,
-  file paths), reply with only the path", then start a fresh agent of the same type with that path in the
-  brief, and replace the id in `state.md`.
+  compacted): do a lead-managed compaction: SendMessage "bring your state file up to date, reply with
+  only its path", then start a fresh agent of the same type with "continue from <path>" in the brief, and
+  replace the id in `state.md`. An agent without a state file (scout, read-only agents) writes a handoff
+  to `.claude/team/reports/<date>-<agent>-handoff.md` instead.
 - **Phase boundaries** (setup done, review round done) are natural handoff points even under the
   threshold, when the next phase does not need the old tool output.
 - **Changing a window** is yours, no pull request: `agent_compact_windows` in `.claude/team/session.json`

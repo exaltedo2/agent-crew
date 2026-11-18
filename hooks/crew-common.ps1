@@ -717,10 +717,10 @@ function Set-ProjectCompactWindow {
 function Add-SessionJsonToGitignore {
   # Once per project: keeps .claude/team/session.json out of git (the lead changes it without a pull request).
   # Appends the line to the project's .gitignore when the project is a git work tree and the line is missing.
-  param([string]$Project)
+  param([string]$Project, [string]$Line = '.claude/team/session.json')
   $gi = Join-Path $Project '.gitignore'
   if (-not (Test-Path -LiteralPath (Join-Path $Project '.git'))) { return }
-  $line = '.claude/team/session.json'
+  $line = $Line
   $text = ''
   if (Test-Path -LiteralPath $gi -PathType Leaf) {
     $text = [System.IO.File]::ReadAllText($gi)
@@ -862,4 +862,61 @@ function Invoke-AgentCompactSync {
   if ($changed.Count -gt 0) { $out += "agent-crew: subagent compact windows set from session.json: $($changed -join ', '). New agents of these types use them." }
   if ($missing.Count -gt 0) { $out += "agent-crew: agent_compact_windows names agents without a project file ($($missing -join ', ')); they keep their shipped default (change it with a pull request to agent-crew)." }
   return $out
+}
+
+# ---------- subagent working state ----------
+# Like the lead's state.md, each subagent keeps its own short state file, so an auto-compaction (or a handoff to a
+# fresh agent) loses nothing: .claude/team/agent-state/<type>-<agent_id>.md. The SubagentStart hook tells the agent
+# the path; the PreCompact hook asks the compaction summary to keep it; session-start prunes old files.
+$script:AgentStateMaxLines = 25
+$script:AgentStateKeepDays = 7
+# Agents that cannot write files get no state file.
+$script:AgentStateSkip = @('scout', 'explore', 'plan', 'claude-code-guide', 'statusline-setup')
+
+function Get-AgentStatePath {
+  param([string]$Project, [string]$AgentType, [string]$AgentId)
+  $t = ($AgentType -replace '[^A-Za-z0-9_.-]', '-').ToLowerInvariant()
+  $i = ($AgentId -replace '[^A-Za-z0-9_-]', '')
+  if (-not $i) { return $null }
+  return (Join-Path $Project ".claude/team/agent-state/$t-$i.md")
+}
+
+function Test-AgentCanWrite {
+  # $true when the agent may keep a state file: a known writer, or an agent file whose tools allow Write or Edit.
+  param([string]$Project, [string]$AgentType)
+  $t = $AgentType.ToLowerInvariant()
+  if ($script:AgentStateSkip -contains $t) { return $false }
+  $dirs = @((Join-Path $Project '.claude/agents')) + @(Get-UserClaudeHomes | ForEach-Object { Join-Path $_ 'agents' })
+  foreach ($dir in $dirs) {
+    $f = Join-Path $dir "$AgentType.md"
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }
+    $lines = [System.IO.File]::ReadAllLines($f)
+    $inFm = $false; $inTools = $false; $tools = ''; $hasTools = $false
+    for ($k = 0; $k -lt $lines.Count; $k++) {
+      $l = $lines[$k]
+      if ($l.Trim() -eq '---') { if ($inFm) { break } else { $inFm = $true; continue } }
+      if (-not $inFm) { break }
+      if ($l -match '^tools:\s*(.*)$') { $hasTools = $true; $tools = $Matches[1]; $inTools = $true; continue }
+      if ($inTools -and $l -match '^\s+-\s*(.+)$') { $tools += ' ' + $Matches[1]; continue }
+      $inTools = $false
+    }
+    if (-not $hasTools) { return $true }
+    return ($tools -match '\b(Write|Edit|MultiEdit)\b' -or $tools -match '\*')
+  }
+  return ($t -eq 'general-purpose')
+}
+
+function Get-AgentStateBrief {
+  param([string]$RelPath)
+  return "agent-crew: your working-state file is $RelPath (create it now). Keep it at most $($script:AgentStateMaxLines) lines with these headings: Goal, Done, Next, Decisions, Files. Update it after every milestone (a step finished, a decision made, before a long command) - it is your memory if your context is compacted. If you see a compaction summary, re-read this file before doing anything else. Delete nothing from the project to make room; just overwrite the file. When you finish, set Next to 'done' and return your normal result."
+}
+
+function Remove-OldAgentState {
+  param([string]$Team)
+  $dir = Join-Path $Team 'agent-state'
+  if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return }
+  $cut = (Get-Date).AddDays(-$script:AgentStateKeepDays)
+  foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter '*.md' -File | Where-Object { $_.LastWriteTime -lt $cut })) {
+    Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
+  }
 }

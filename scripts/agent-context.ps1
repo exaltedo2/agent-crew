@@ -101,6 +101,9 @@ foreach ($f in ($files | Sort-Object LastWriteTimeUtc -Descending)) {
   }
   if ($null -eq $ctx) { continue }
   $w = Get-Window $type
+  $stateRel = ''
+  $sf = Join-Path $Project ('.claude/team/agent-state/' + (($type -replace '[^A-Za-z0-9_.-]', '-').ToLowerInvariant()) + "-$id.md")
+  if (Test-Path -LiteralPath $sf -PathType Leaf) { $stateRel = '.claude/team/agent-state/' + (Split-Path -Leaf $sf) }
   $pct = if ($w.Value) { [Math]::Round(100.0 * $ctx / $w.Value) } else { $null }
   $advice = if ($compactions -gt 0) { 'handoff (already compacted)' }
   elseif ($null -ne $pct -and $pct -ge 100 * $Threshold) { 'handoff' }
@@ -108,7 +111,7 @@ foreach ($f in ($files | Sort-Object LastWriteTimeUtc -Descending)) {
   else { 'resume' }
   $rows.Add([pscustomobject]@{
       id = $id; type = $type; description = $desc; model = $model; context = $ctx; window = $w.Value
-      percent = $pct; compactions = $compactions; finished = [bool]($meta -and $meta.finished); last = $when; advice = $advice
+      percent = $pct; compactions = $compactions; finished = [bool]($meta -and $meta.finished); last = $when; advice = $advice; state = $stateRel
     })
   if ($rows.Count -ge $Last) { break }
 }
@@ -121,4 +124,5 @@ foreach ($r in $rows) {
   $p = if ($null -ne $r.percent) { $r.percent } else { '?' }
   $t = if ($r.type.Length -gt 16) { $r.type.Substring(0, 16) } else { $r.type }
   Write-Output ('{0,-19} {1,-16} {2,8} {3,8} {4,5} {5,4}  {6}' -f $r.id, $t, $r.context, $win, $p, $r.compactions, $r.advice)
+  if ($r.state) { Write-Output ('{0,-19} state: {1}' -f '', $r.state) }
 }

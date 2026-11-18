@@ -36,6 +36,8 @@ try {
   foreach ($line in @(Invoke-CompactWindowSync $team $root (Get-UserClaudeHomes))) { Write-Output $line }
   # ... and its per-project subagent windows (agent_compact_windows) into the project's own agent files.
   foreach ($line in @(Invoke-AgentCompactSync $team $root)) { Write-Output $line }
+  # Subagent working-state files older than a week belong to finished work.
+  try { Remove-OldAgentState $team } catch { }
 
   $reasons = @()
   $marker = Join-Path $team '.last-retro'

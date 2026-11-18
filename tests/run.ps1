@@ -607,6 +607,29 @@ try {
   $r = Invoke-Script (Join-Path $hooks 'pre-compact.ps1') @() ('{"cwd":"' + (ConvertTo-Slash $Work) + '"}')
   Check 'pre/post-compact without .claude/team are no-ops' (($r.Exit -eq 0) -and -not (Test-Path (Join-Path $Work 'snapshots')))
 
+  # subagent working state: subagent-start, pre-compact inside a subagent, guard-paths, pruning
+  function Sub-Start($type, $id, $cwd = $pj) {
+    return Invoke-Script (Join-Path $hooks 'subagent-start.ps1') @() ('{"cwd":"' + $cwd + '","hook_event_name":"SubagentStart","agent_type":"' + $type + '","agent_id":"' + $id + '"}')
+  }
+  $r = Sub-Start 'coder' 'a1b2c3'
+  $sj = $null; try { $sj = $r.Out | ConvertFrom-Json } catch { }
+  Check 'agent state: subagent-start gives a writer its own state file via additionalContext' (($sj -and $sj.hookSpecificOutput.hookEventName -eq 'SubagentStart') -and ($sj.hookSpecificOutput.additionalContext -match '\.claude/team/agent-state/coder-a1b2c3\.md') -and ($sj.hookSpecificOutput.additionalContext -match 'Goal, Done, Next')) $r.Out
+  Check 'agent state: the agent-state folder is created' (Test-Path -LiteralPath (Join-Path $proj '.claude/team/agent-state'))
+  Check 'agent state: read-only agents and the lead get nothing' ((((Sub-Start 'scout' 'x1').Out.Trim()) -eq '') -and (((Sub-Start 'Explore' 'x2').Out.Trim()) -eq '') -and (((Sub-Start 'lead' 'x3').Out.Trim()) -eq ''))
+  Check 'agent state: built-in general-purpose gets one, an unknown agent without a file does not' (((Sub-Start 'general-purpose' 'g1').Out -match 'general-purpose-g1\.md') -and (((Sub-Start 'mystery' 'm1').Out.Trim()) -eq ''))
+  $r = Invoke-Script (Join-Path $hooks 'subagent-start.ps1') @() ('{"cwd":"' + (ConvertTo-Slash $Work) + '","agent_type":"coder","agent_id":"z9"}')
+  Check 'agent state: no-op without .claude/team' (($r.Exit -eq 0) -and ($r.Out.Trim() -eq ''))
+  $stf = Join-Path $proj '.claude/team/agent-state/coder-a1b2c3.md'
+  [System.IO.File]::WriteAllText($stf, "Goal: fix X`nDone: step 1`nNext: step 2`n")
+  $snapCount = @(Get-ChildItem -LiteralPath $snap -Filter 'state-*.md').Count
+  $r = Invoke-Script (Join-Path $hooks 'pre-compact.ps1') @() ('{"cwd":"' + $pj + '","hook_event_name":"PreCompact","trigger":"auto","agent_type":"coder","agent_id":"a1b2c3"}')
+  Check 'agent state: pre-compact in a subagent asks the summary to keep its state file and content' (($r.Out -match 'coder-a1b2c3\.md') -and ($r.Out -match 'Next: step 2')) $r.Out
+  Check 'agent state: pre-compact in a subagent does not snapshot the lead state.md' (@(Get-ChildItem -LiteralPath $snap -Filter 'state-*.md').Count -eq $snapCount)
+  Check 'agent state: a report-only agent may write its state file, still nothing else' (((Guard 'reviewer' "$pj/.claude/team/agent-state/reviewer-r1.md").Exit -eq 0) -and ((Guard 'reviewer' "$pj/.claude/team/agent-state/sub/x.md").Exit -eq 2) -and ((Guard 'reviewer' "$pj/.claude/team/state.md").Exit -eq 2))
+  $oldf = Join-Path $proj '.claude/team/agent-state/coder-old.md'
+  [System.IO.File]::WriteAllText($oldf, 'old')
+  (Get-Item -LiteralPath $oldf).LastWriteTime = (Get-Date).AddDays(-8)
+
   # session-start
   function Start-Hook($source, $cwd = $pj) {
     return Invoke-Script (Join-Path $hooks 'session-start.ps1') @() ('{"cwd":"' + $cwd + '","hook_event_name":"SessionStart","source":"' + $source + '"}')
@@ -617,6 +640,7 @@ try {
   $marker = Join-Path $proj '.claude/team/.last-retro'
   $r = Start-Hook 'startup'
   Check 'session-start startup: retro never ran' ($r.Out -match 'crew-retro' -and $r.Out -match 'never ran')
+  Check 'agent state: session-start prunes state files older than 7 days, keeps fresh ones' ((-not (Test-Path -LiteralPath $oldf)) -and (Test-Path -LiteralPath $stf))
   Set-Content -LiteralPath $marker -Value (Get-Date).ToString('o')
   $r = Start-Hook 'startup'
   Check 'session-start startup: over-cap file asks for the retro' ($r.Out -match 'crew-retro' -and $r.Out -match 'state\.md has')

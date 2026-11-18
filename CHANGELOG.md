@@ -25,6 +25,12 @@ the session-start hook says when it differs from the installed one.
   and auto-compactions from its transcript, with the advice `resume` or `handoff`. `lead.md`: check before every
   resume; at 60% of the window, after an auto-compaction or at a phase boundary, ask the agent for a 40-line handoff
   in `.claude/team/reports/` and continue with a fresh agent. Auto-compaction stays as the safety net.
+- Every subagent keeps its own working state, like the lead's `state.md`: new SubagentStart hook `subagent-start`
+  gives each agent that can write files `.claude/team/agent-state/<type>-<agent_id>.md` (Goal, Done, Next, Decisions,
+  Files; at most 25 lines), updated at each milestone and re-read after a compaction summary. `pre-compact` inside a
+  subagent asks the summary to keep that file (whether PreCompact fires for subagents is not documented).
+  `guard-paths` lets report-only agents write it; session-start prunes files older than 7 days; it is added to
+  `.gitignore`. A lead handoff now reuses it: fresh agent, "continue from <path>". `agent-context` shows the file.
 - `crew-hire`: every project agent it creates gets an `autoCompactWindow` chosen from its job (100000-250000),
   so project-specific agents are sized per project by the crew itself, never shipped in this repo.
 

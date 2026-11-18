@@ -84,7 +84,9 @@ try {
 
   if ($isReportOnly) {
     if ($rel -and $rel -match '(?i)^\.claude/team/reports/.+') { exit 0 }
-    [Console]::Error.WriteLine("agent-crew: '$agent' may write only to .claude/team/reports/ (tried: $file). Put your result in a report file there and return its path.")
+    # Its own working-state file (named by the SubagentStart hook).
+    if ($rel -and $rel -match '(?i)^\.claude/team/agent-state/[^/]+\.md$') { exit 0 }
+    [Console]::Error.WriteLine("agent-crew: '$agent' may write only to .claude/team/reports/ and its .claude/team/agent-state/ file (tried: $file). Put your result in a report file there and return its path.")
     exit 2
   }
 
