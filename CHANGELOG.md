@@ -13,7 +13,8 @@ the session-start hook says when it differs from the installed one.
 ## 0.6.0 - 2026-11-18
 
 - Each agent has its own, smaller context window: shipped `autoCompactWindow` in the front matter (scout 100000,
-  thinker / architect / reviewer 150000, coder 200000). Subagents no longer inherit a 1M window; turns re-read
+  thinker / architect / reviewer 150000, coder 200000; catalog: docs-writer 120000, security-reviewer /
+  tester / ui-reviewer 150000, perf-profiler 200000). Subagents no longer inherit a 1M window; turns re-read
   less and compaction comes before quality drops. The lead's own window is unchanged (`session.json`).
 - The lead changes them per project without a pull request: `agent_compact_windows` in `.claude/team/session.json`
   (`{"coder": 180000}`, 100000-1000000, clamped). The session-start hook writes ONLY the `autoCompactWindow:` line
@@ -24,6 +25,8 @@ the session-start hook says when it differs from the installed one.
   and auto-compactions from its transcript, with the advice `resume` or `handoff`. `lead.md`: check before every
   resume; at 60% of the window, after an auto-compaction or at a phase boundary, ask the agent for a 40-line handoff
   in `.claude/team/reports/` and continue with a fresh agent. Auto-compaction stays as the safety net.
+- `crew-hire`: every project agent it creates gets an `autoCompactWindow` chosen from its job (100000-250000),
+  so project-specific agents are sized per project by the crew itself, never shipped in this repo.
 
 ## 0.5.0 - 2026-10-28
 

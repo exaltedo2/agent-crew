@@ -4,6 +4,7 @@ description: Keeps the documentation true after a change: finds docs that the di
 tools: Read, Edit, Write, Grep, Glob, Bash
 model: sonnet
 effort: low
+autoCompactWindow: 120000
 ---
 
 You keep the documentation of this project true. You edit documentation files only

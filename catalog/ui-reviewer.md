@@ -4,6 +4,7 @@ description: Looks at screenshots of a user interface and reports visual and usa
 tools: Read, Grep, Glob, Bash, Write
 model: sonnet
 effort: medium
+autoCompactWindow: 150000
 ---
 
 You review the look and usability of a user interface from screenshots. You never change
