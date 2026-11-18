@@ -611,6 +611,12 @@ try {
   function Sub-Start($type, $id, $cwd = $pj) {
     return Invoke-Script (Join-Path $hooks 'subagent-start.ps1') @() ('{"cwd":"' + $cwd + '","hook_event_name":"SubagentStart","agent_type":"' + $type + '","agent_id":"' + $id + '"}')
   }
+  # the fixture's own coder file, so the test does not depend on the runner's ~/.claude/agents
+  $projAgents = Join-Path $proj '.claude\agents'
+  if (-not (Test-Path -LiteralPath (Join-Path $projAgents 'coder.md'))) {
+    New-Item -ItemType Directory -Force -Path $projAgents | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $projAgents 'coder.md'), "---`nname: coder`ntools: Read, Edit, Write, Bash`n---`nBody.`n")
+  }
   $r = Sub-Start 'coder' 'a1b2c3'
   $sj = $null; try { $sj = $r.Out | ConvertFrom-Json } catch { }
   Check 'agent state: subagent-start gives a writer its own state file via additionalContext' (($sj -and $sj.hookSpecificOutput.hookEventName -eq 'SubagentStart') -and ($sj.hookSpecificOutput.additionalContext -match '\.claude/team/agent-state/coder-a1b2c3\.md') -and ($sj.hookSpecificOutput.additionalContext -match 'Goal, Done, Next')) $r.Out
