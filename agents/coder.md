@@ -4,6 +4,7 @@ description: Implements a given plan or a clearly defined change, runs all the p
 tools: Read, Edit, Write, Bash, Grep, Glob
 model: sonnet
 effort: medium
+autoCompactWindow: 200000
 ---
 
 You are the coder of a small agent team. You implement the plan you were given and do

@@ -607,6 +607,35 @@ try {
   $r = Invoke-Script (Join-Path $hooks 'pre-compact.ps1') @() ('{"cwd":"' + (ConvertTo-Slash $Work) + '"}')
   Check 'pre/post-compact without .claude/team are no-ops' (($r.Exit -eq 0) -and -not (Test-Path (Join-Path $Work 'snapshots')))
 
+  # subagent working state: subagent-start, pre-compact inside a subagent, guard-paths, pruning
+  function Sub-Start($type, $id, $cwd = $pj) {
+    return Invoke-Script (Join-Path $hooks 'subagent-start.ps1') @() ('{"cwd":"' + $cwd + '","hook_event_name":"SubagentStart","agent_type":"' + $type + '","agent_id":"' + $id + '"}')
+  }
+  # the fixture's own coder file, so the test does not depend on the runner's ~/.claude/agents
+  $projAgents = Join-Path $proj '.claude\agents'
+  if (-not (Test-Path -LiteralPath (Join-Path $projAgents 'coder.md'))) {
+    New-Item -ItemType Directory -Force -Path $projAgents | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $projAgents 'coder.md'), "---`nname: coder`ntools: Read, Edit, Write, Bash`n---`nBody.`n")
+  }
+  $r = Sub-Start 'coder' 'a1b2c3'
+  $sj = $null; try { $sj = $r.Out | ConvertFrom-Json } catch { }
+  Check 'agent state: subagent-start gives a writer its own state file via additionalContext' (($sj -and $sj.hookSpecificOutput.hookEventName -eq 'SubagentStart') -and ($sj.hookSpecificOutput.additionalContext -match '\.claude/team/agent-state/coder-a1b2c3\.md') -and ($sj.hookSpecificOutput.additionalContext -match 'Goal, Done, Next')) $r.Out
+  Check 'agent state: the agent-state folder is created' (Test-Path -LiteralPath (Join-Path $proj '.claude/team/agent-state'))
+  Check 'agent state: read-only agents and the lead get nothing' ((((Sub-Start 'scout' 'x1').Out.Trim()) -eq '') -and (((Sub-Start 'Explore' 'x2').Out.Trim()) -eq '') -and (((Sub-Start 'lead' 'x3').Out.Trim()) -eq ''))
+  Check 'agent state: built-in general-purpose gets one, an unknown agent without a file does not' (((Sub-Start 'general-purpose' 'g1').Out -match 'general-purpose-g1\.md') -and (((Sub-Start 'mystery' 'm1').Out.Trim()) -eq ''))
+  $r = Invoke-Script (Join-Path $hooks 'subagent-start.ps1') @() ('{"cwd":"' + (ConvertTo-Slash $Work) + '","agent_type":"coder","agent_id":"z9"}')
+  Check 'agent state: no-op without .claude/team' (($r.Exit -eq 0) -and ($r.Out.Trim() -eq ''))
+  $stf = Join-Path $proj '.claude/team/agent-state/coder-a1b2c3.md'
+  [System.IO.File]::WriteAllText($stf, "Goal: fix X`nDone: step 1`nNext: step 2`n")
+  $snapCount = @(Get-ChildItem -LiteralPath $snap -Filter 'state-*.md').Count
+  $r = Invoke-Script (Join-Path $hooks 'pre-compact.ps1') @() ('{"cwd":"' + $pj + '","hook_event_name":"PreCompact","trigger":"auto","agent_type":"coder","agent_id":"a1b2c3"}')
+  Check 'agent state: pre-compact in a subagent asks the summary to keep its state file and content' (($r.Out -match 'coder-a1b2c3\.md') -and ($r.Out -match 'Next: step 2')) $r.Out
+  Check 'agent state: pre-compact in a subagent does not snapshot the lead state.md' (@(Get-ChildItem -LiteralPath $snap -Filter 'state-*.md').Count -eq $snapCount)
+  Check 'agent state: a report-only agent may write its state file, still nothing else' (((Guard 'reviewer' "$pj/.claude/team/agent-state/reviewer-r1.md").Exit -eq 0) -and ((Guard 'reviewer' "$pj/.claude/team/agent-state/sub/x.md").Exit -eq 2) -and ((Guard 'reviewer' "$pj/.claude/team/state.md").Exit -eq 2))
+  $oldf = Join-Path $proj '.claude/team/agent-state/coder-old.md'
+  [System.IO.File]::WriteAllText($oldf, 'old')
+  (Get-Item -LiteralPath $oldf).LastWriteTime = (Get-Date).AddDays(-8)
+
   # session-start
   function Start-Hook($source, $cwd = $pj) {
     return Invoke-Script (Join-Path $hooks 'session-start.ps1') @() ('{"cwd":"' + $cwd + '","hook_event_name":"SessionStart","source":"' + $source + '"}')
@@ -617,6 +646,7 @@ try {
   $marker = Join-Path $proj '.claude/team/.last-retro'
   $r = Start-Hook 'startup'
   Check 'session-start startup: retro never ran' ($r.Out -match 'crew-retro' -and $r.Out -match 'never ran')
+  Check 'agent state: session-start prunes state files older than 7 days, keeps fresh ones' ((-not (Test-Path -LiteralPath $oldf)) -and (Test-Path -LiteralPath $stf))
   Set-Content -LiteralPath $marker -Value (Get-Date).ToString('o')
   $r = Start-Hook 'startup'
   Check 'session-start startup: over-cap file asks for the retro' ($r.Out -match 'crew-retro' -and $r.Out -match 'state\.md has')
@@ -741,6 +771,41 @@ try {
     Check 'compact window: session.json is added to .gitignore once' (($gi -ceq "node_modules/`n.claude/team/session.json`n")) $gi
     $r = Start-Hook 'compact' (ConvertTo-Slash $cwp)
     Check 'compact window: not applied on the compact source' (-not ($r.Out -match 'compact window')) $r.Out
+    # --- subagent windows: session.json agent_compact_windows -> project agent front matter ---
+    $acp = Join-Path $Work 'acwhook'
+    Copy-Item -Recurse -LiteralPath $ok -Destination $acp
+    [System.IO.File]::WriteAllText((Join-Path $acp '.claude\team\.last-retro'), (Get-Date).ToString('o'))
+    New-Item -ItemType Directory -Force -Path (Join-Path $acp '.claude\agents') | Out-Null
+    $acA = Join-Path $acp '.claude\agents\worker.md'
+    $acB = Join-Path $acp '.claude\agents\helper.md'
+    $acOrigA = "---`r`nname: worker`r`ndescription: x < y & 'z'`r`nmodel: sonnet`r`n---`r`n`r`nBody line.`r`nautoCompactWindow: 5 in the body stays`r`n"
+    $acOrigB = "---`nname: helper`nautoCompactWindow: 300000`nmodel: haiku`n---`nBody.`n"
+    [System.IO.File]::WriteAllText($acA, $acOrigA, $utf8)
+    [System.IO.File]::WriteAllText($acB, $acOrigB, $utf8)
+    $acSj = Join-Path $acp '.claude\team\session.json'
+    [System.IO.File]::WriteAllText($acSj, '{ "lead_compact_window": 200000, "agent_compact_windows": { "worker": 180000, "helper": 120000, "ghost": 150000 } }')
+    $r = Start-Hook 'startup' (ConvertTo-Slash $acp)
+    $a1 = [System.IO.File]::ReadAllText($acA, $utf8); $b1 = [System.IO.File]::ReadAllText($acB, $utf8)
+    Check 'agent windows: inserted before the closing --- with the file''s line ending, body untouched' ($a1 -ceq $acOrigA.Replace("model: sonnet`r`n---", "model: sonnet`r`nautoCompactWindow: 180000`r`n---")) $a1
+    Check 'agent windows: an existing line is replaced in place' ($b1 -ceq $acOrigB.Replace('autoCompactWindow: 300000', 'autoCompactWindow: 120000')) $b1
+    Check 'agent windows: says what it set and names agents without a project file' (($r.Out -match 'worker 180000') -and ($r.Out -match 'helper 120000') -and ($r.Out -match 'without a project file \(ghost\)')) $r.Out
+    $stampA = (Get-Item -LiteralPath $acA).LastWriteTimeUtc
+    Start-Sleep -Milliseconds 1100
+    $r = Start-Hook 'resume' (ConvertTo-Slash $acp)
+    Check 'agent windows: unchanged values are not rewritten or reported again' ((-not ($r.Out -match 'subagent compact windows set')) -and ((Get-Item -LiteralPath $acA).LastWriteTimeUtc -eq $stampA)) $r.Out
+    [System.IO.File]::WriteAllText($acSj, '{ "lead_compact_window": 200000, "agent_compact_windows": { "worker": 2000000, "helper": "big", "../x": 150000 } }')
+    $r = Start-Hook 'startup' (ConvertTo-Slash $acp)
+    Check 'agent windows: clamps to 1000000, rejects non-numbers and bad names' (([System.IO.File]::ReadAllText($acA, $utf8) -match 'autoCompactWindow: 1000000') -and ($r.Out -match 'clamped') -and ($r.Out -match 'helper must be a number') -and ($r.Out -match 'not valid') -and ([System.IO.File]::ReadAllText($acB, $utf8) -match 'autoCompactWindow: 120000')) $r.Out
+    [System.IO.File]::WriteAllText($acSj, '{ "lead_compact_window": 200000, "agent_compact_windows": { "worker": 160000 } }')
+    $c = Invoke-Check @('-Project', $acp)
+    Check 'agent windows: check-team reports a project file that is not yet synced' ($c.Out -match 'worker 160000 but \.claude/agents/worker\.md has 1000000') $c.Out
+    $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = '150000'
+    $r = Start-Hook 'startup' (ConvertTo-Slash $acp)
+    Remove-Item Env:\CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    Check 'agent windows: still written, and the env override is named' (($r.Out -match 'agent_compact_windows has no effect') -and ([System.IO.File]::ReadAllText($acA, $utf8) -match 'autoCompactWindow: 160000')) $r.Out
+    $c = Invoke-Check @('-Project', $acp)
+    Check 'agent windows: check-team is quiet once synced' (-not ($c.Out -match 'agent_compact_windows|agents/worker')) $c.Out
+    Check 'agent windows: no .tmp or .bak files are left behind' (@(Get-ChildItem -LiteralPath (Join-Path $acp '.claude\agents') | Where-Object { $_.Name -match '.(tmp|bak)$' }).Count -eq 0)
   } finally {
     $env:HOME = $cwSaved.H; $env:USERPROFILE = $cwSaved.U; $env:CLAUDE_CONFIG_DIR = $cwSaved.C
   }
@@ -955,6 +1020,44 @@ try {
   } finally {
     foreach ($n in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($n, $savedEnv[$n]) }
   }
+
+  # ------------------------------------------------------------------ agent-context
+  Section 'agent-context.ps1'
+  $axProj = Join-Path $Work 'ax proj'
+  $axHome = Join-Path $Work 'axhome'
+  New-Item -ItemType Directory -Force -Path (Join-Path $axProj '.claude\agents'), (Join-Path $axHome 'agents') | Out-Null
+  $axSlug = ([System.IO.Path]::GetFullPath($axProj).TrimEnd('\') -replace '[^A-Za-z0-9]', '-')
+  $axSub = Join-Path $axHome "projects\$axSlug\sess1\subagents"
+  New-Item -ItemType Directory -Force -Path $axSub | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $axProj '.claude\agents\coder.md'), "---`nname: coder`nautoCompactWindow: 200000`n---`nBody.`n")
+  [System.IO.File]::WriteAllText((Join-Path $axHome 'agents\scout.md'), "---`nname: scout`nautoCompactWindow: 100000`n---`nBody.`n")
+  function New-AxAgent($id, $type, $ctx, [int]$compacts = 0) {
+    $u = '{"input_tokens":' + 10 + ',"cache_creation_input_tokens":' + 1000 + ',"cache_read_input_tokens":' + ($ctx - 1010) + ',"output_tokens":50}'
+    $lines = @('{"type":"user","isSidechain":true,"message":{"role":"user","content":"go"}}')
+    $lines += '{"type":"assistant","isSidechain":true,"timestamp":"2026-11-18T10:00:00Z","message":{"model":"claude-sonnet-5-5","usage":{"input_tokens":5,"cache_creation_input_tokens":5,"cache_read_input_tokens":5}}}'
+    for ($k = 0; $k -lt $compacts; $k++) { $lines += '{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":190000}}' }
+    $lines += '{"type":"assistant","isSidechain":true,"timestamp":"2026-11-18T10:05:00Z","message":{"model":"claude-sonnet-5-5","usage":' + $u + '}}'
+    [System.IO.File]::WriteAllLines((Join-Path $axSub "agent-$id.jsonl"), $lines)
+    [System.IO.File]::WriteAllText((Join-Path $axSub "agent-$id.meta.json"), '{"agentType":"' + $type + '","description":"job ' + $id + '"}')
+  }
+  New-AxAgent 'aaa111' 'coder' 90000
+  New-AxAgent 'bbb222' 'coder' 130000
+  New-AxAgent 'ccc333' 'scout' 40000 1
+  New-AxAgent 'ddd444' 'general-purpose' 150000
+  $axArgs = @('-Project', $axProj, '-ClaudeHome', $axHome)
+  $r = Invoke-Script (Join-Path $Root 'scripts\agent-context.ps1') ($axArgs + @('-Format', 'json'))
+  $rows = @(($r.Out | ConvertFrom-Json) | ForEach-Object { $_ })
+  $byId = @{}; foreach ($x in $rows) { $byId[$x.id] = $x }
+  Check 'agent-context: lists every subagent of the session' ($rows.Count -eq 4) $r.Out
+  Check 'agent-context: context = input + cache creation + cache read of the LAST request' ($byId['aaa111'].context -eq 90000) $r.Out
+  Check 'agent-context: window from the project agent file, under 60% = resume' (($byId['aaa111'].window -eq 200000) -and ($byId['aaa111'].percent -eq 45) -and ($byId['aaa111'].advice -eq 'resume')) $r.Out
+  Check 'agent-context: at or over 60% = handoff' (($byId['bbb222'].percent -eq 65) -and ($byId['bbb222'].advice -eq 'handoff')) $r.Out
+  Check 'agent-context: window from the user agents folder, an auto-compaction = handoff' (($byId['ccc333'].window -eq 100000) -and ($byId['ccc333'].compactions -eq 1) -and ($byId['ccc333'].advice -match 'already compacted')) $r.Out
+  Check 'agent-context: unknown window and a large context = handoff' (($null -eq $byId['ddd444'].window) -and ($byId['ddd444'].advice -match 'window unknown')) $r.Out
+  $r = Invoke-Script (Join-Path $Root 'scripts\agent-context.ps1') ($axArgs + @('-Agent', 'bbb'))
+  Check 'agent-context: -Agent filters by id prefix (table output)' (($r.Exit -eq 0) -and ($r.Out -match 'bbb222') -and -not ($r.Out -match 'aaa111')) $r.Out
+  $r = Invoke-Script (Join-Path $Root 'scripts\agent-context.ps1') @('-Project', (Join-Path $Work 'nowhere'), '-ClaudeHome', $axHome)
+  Check 'agent-context: a project without transcripts says so and exits 0' (($r.Exit -eq 0) -and ($r.Out -match 'no transcripts')) $r.Out
 
   # ------------------------------------------------------------------ installer
   Section 'install.ps1'

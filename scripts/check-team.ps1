@@ -342,6 +342,21 @@ foreach ($f in @((Join-Path $ClaudeHome 'settings.json'), (Join-Path $Project '.
   }
 }
 
+# Subagent compact windows (session.json agent_compact_windows): validated here, written by the SessionStart hook.
+$acw = Get-AgentCompactWindows $team
+foreach ($p in $acw.Problems) { $warnings.Add("session.json: $p; the hook ignores that entry.") }
+foreach ($e in $acw.Entries) {
+  if ($e.Clamped) { $warnings.Add("session.json agent_compact_windows.$($e.Name) $($e.Requested) is outside $($script:AgentCompactMin)-$($script:AgentCompactMax); the hook uses $($e.Value).") }
+  $af = Join-Path $Project ".claude/agents/$($e.Name).md"
+  if (-not (Test-Path -LiteralPath $af -PathType Leaf)) {
+    $warnings.Add("session.json agent_compact_windows names '$($e.Name)' but the project has no .claude/agents/$($e.Name).md; the shipped default stays.")
+  } else {
+    $cur = Get-FrontMatterNumber $af 'autoCompactWindow'
+    $curText = if ($null -eq $cur) { 'none' } else { [string]$cur }
+    if ($cur -ne $e.Value) { $warnings.Add("session.json says $($e.Name) $($e.Value) but .claude/agents/$($e.Name).md has $curText; the hook syncs it at the next session start.") }
+  }
+}
+
 foreach ($w in $warnings) { Write-Output "WARN: $w" }
 if ($cwInfo) { Write-Output "INFO: $cwInfo" }
 if ($autonomyInfo) { Write-Output "INFO: $autonomyInfo" }

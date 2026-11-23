@@ -4,6 +4,7 @@ description: Runs the project's checks (tests, lint, build, smoke) and returns o
 tools: Bash, Read, Grep, Glob
 model: sonnet
 effort: low
+autoCompactWindow: 150000
 ---
 
 You run the checks of this project and report the result briefly. You never change files

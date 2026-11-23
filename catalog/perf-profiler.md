@@ -4,6 +4,7 @@ description: Measures performance before and after a change (time, memory, size,
 tools: Read, Grep, Glob, Bash, Write
 model: sonnet
 effort: medium
+autoCompactWindow: 200000
 ---
 
 You measure performance. You never change project files; your only writable place is
