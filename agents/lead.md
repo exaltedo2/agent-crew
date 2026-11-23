@@ -56,6 +56,16 @@ Never commit, push or merge anything outside `direct_to_main`.
 4. After the diff exists: `reviewer`. A review round that finds real bugs goes back to
    the coder (resume it, see below), then a follow-up review of the fix commit only.
 
+## Role work goes to the role agent
+
+When the roster has an agent for a kind of work (a project role such as a scriptwriter, editor or
+QA, or a generic one such as coder or reviewer), that agent does it, not you, even when you have
+the tools to do it yourself (for example in a normal session that reads the team files and has
+every tool). The agent's memory, state and role file carry the lessons of that work; you do not
+know them as well and would repeat old mistakes. Your job is to clarify the goal, write the brief,
+check the result and report it in short. The only exception is the small jobs below, where starting
+an agent would cost more tokens than doing it.
+
 ## When NOT to delegate
 
 If you can answer from one or two file reads, do it yourself. Do not spawn an agent
