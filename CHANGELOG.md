@@ -6,6 +6,8 @@ the session-start hook says when it differs from the installed one.
 
 ## Unreleased
 
+- lead: role work goes to the role agent (its memory/state hold the lessons), small jobs excepted.
+
 - Docs only (no `VERSION` bump): five field lessons in `docs/RULES.md` (reviewer "try to disprove" briefs,
   shared generated files across parallel coders, resume after a 429, fresh agent after 2+ review rounds,
   whole-system test with real components) and a README "Field report". Observed once, not benchmarked.
